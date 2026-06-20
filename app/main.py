@@ -40,17 +40,18 @@ def home() -> str:
   </style>
 </head>
 <body>
-  <h1>Lab Requisition Assistant</h1>
-  <p>Choose a template, enter patient info, generate PDF, and optionally enable reminders.</p>
+  <h1>Lab Template Filler</h1>
+  <p>Select a PDF template from your folder and fill it with patient information.</p>
 
   <section>
-    <h2>1) Available Templates</h2>
+    <h2>1) Template Files</h2>
     <button onclick="loadTemplates()">Load Templates</button>
-    <pre id="templates"></pre>
+    <div id="templates"></div>
+    <iframe id="template_preview" title="Template preview" style="width:100%;height:500px;border:1px solid #ddd;border-radius:6px;"></iframe>
   </section>
 
   <section>
-    <h2>2) Generate Lab Requisition</h2>
+    <h2>2) Fill Selected Template</h2>
     <input id="full_name" placeholder="Full name" />
     <input id="email" placeholder="Email" />
     <input id="patient_last_name" placeholder="Patient last name" />
@@ -58,17 +59,10 @@ def home() -> str:
     <input id="health_number" placeholder="Insurance/health number" />
     <input id="date_of_birth" placeholder="Date of birth (YYYY-MM-DD)" />
     <input id="service_date" placeholder="Service date (YYYY-MM-DD)" />
-    <select id="template_key">
-      <option value="diabetes_blood_test">Diabetes Blood Test</option>
-      <option value="general_annual_lab">General Annual Lab Requisition</option>
-      <option value="thyroid_monitoring">Thyroid Monitoring</option>
-    </select>
-    <label><input id="reminder_enabled" type="checkbox" /> Enable reminders</label>
-    <select id="cadence">
-      <option value="12_months">Remind every 12 months</option>
-      <option value="6_months">Remind every 6 months</option>
-    </select>
-    <button onclick="generate()">Generate PDF Request</button>
+    <input id="phone_number" placeholder="Phone number (optional)" />
+    <input id="address" placeholder="Address (optional)" />
+    <select id="template_name"></select>
+    <button onclick="generate()">Fill Template PDF</button>
     <pre id="generate_result"></pre>
   </section>
 
@@ -79,12 +73,34 @@ def home() -> str:
     <pre id="history"></pre>
   </section>
 
-  <p>Advanced API testing: <a href="/docs" target="_blank">/docs</a></p>
+  <p>API docs: <a href="/docs" target="_blank">/docs</a></p>
 
   <script>
     async function loadTemplates() {
-      const res = await fetch('/api/templates');
-      document.getElementById('templates').textContent = JSON.stringify(await res.json(), null, 2);
+      const res = await fetch('/api/template-files');
+      const templates = await res.json();
+      const wrap = document.getElementById('templates');
+      const select = document.getElementById('template_name');
+      wrap.innerHTML = '';
+      select.innerHTML = '';
+      templates.forEach((t, i) => {
+        const opt = document.createElement('option');
+        opt.value = t.name;
+        opt.textContent = t.name;
+        select.appendChild(opt);
+
+        const row = document.createElement('div');
+        row.style.marginBottom = '10px';
+        row.innerHTML = `<strong>${t.name}</strong><br/><a href="${t.preview_url}" target="_blank">Open Preview PDF</a>`;
+        row.onclick = () => {
+          document.getElementById('template_preview').src = t.preview_url;
+          document.getElementById('template_name').value = t.name;
+        };
+        wrap.appendChild(row);
+        if (i === 0) {
+          document.getElementById('template_preview').src = t.preview_url;
+        }
+      });
     }
 
     async function generate() {
@@ -98,12 +114,16 @@ def home() -> str:
       const body = {
         full_name: document.getElementById('full_name').value,
         email: document.getElementById('email').value,
-        template_key: document.getElementById('template_key').value,
-        reminder_enabled: document.getElementById('reminder_enabled').checked,
-        cadence: document.getElementById('cadence').value,
-        profile_patch
+        template_name: document.getElementById('template_name').value,
+        patient_last_name: profile_patch.patient_last_name,
+        patient_first_name: profile_patch.patient_first_name,
+        health_number: profile_patch.health_number,
+        date_of_birth: profile_patch.date_of_birth,
+        service_date: profile_patch.service_date,
+        phone_number: document.getElementById('phone_number').value,
+        address: document.getElementById('address').value
       };
-      const res = await fetch('/api/forms/generate', {
+      const res = await fetch('/api/forms/fill-template', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)

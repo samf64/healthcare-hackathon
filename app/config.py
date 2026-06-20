@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_use_tls: bool = True
     requisition_pdf_path: str = ""
+    template_library_dir: str = "template_library"
     generated_pdf_dir: str = "generated_forms"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")

@@ -60,6 +60,7 @@ class FormTemplateOut(BaseModel):
     title: str
     description: str
     suggested_fields: list[str]
+    preview_url: str | None = None
 
 
 class ReminderSubscriptionRequest(BaseModel):
@@ -100,4 +101,22 @@ class FormHistoryItem(BaseModel):
     file_path: str
     created_at: datetime
     is_final: bool
+
+
+class TemplateFileOut(BaseModel):
+    name: str
+    preview_url: str
+
+
+class FillTemplateRequest(BaseModel):
+    template_name: str
+    full_name: str
+    email: EmailStr
+    patient_last_name: str
+    patient_first_name: str
+    health_number: str
+    date_of_birth: str
+    service_date: str
+    phone_number: str | None = ""
+    address: str | None = ""
 

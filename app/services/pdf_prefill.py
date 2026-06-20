@@ -11,7 +11,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
 from app.config import settings
-from app.services.form_templates import build_template_overlay
+from app.services.form_templates import build_template_overlay, get_template_or_none
 
 
 class PDFPrefillService:
@@ -35,7 +35,13 @@ class PDFPrefillService:
         fields = reader.get_fields() or {}
         return {"exists": True, "fillable": bool(fields), "fields": list(fields.keys())}
 
-    def generate_prefilled_pdf(self, profile_data: dict[str, Any], user_id: int, template_key: str | None = None) -> str:
+    def generate_prefilled_pdf(
+        self,
+        profile_data: dict[str, Any],
+        user_id: int,
+        template_key: str | None = None,
+        output_name: str | None = None,
+    ) -> str:
         if not self.template_path:
             raise ValueError("No requisition_pdf_path configured.")
         template = Path(self.template_path)
@@ -44,15 +50,17 @@ class PDFPrefillService:
 
         output_dir = Path(settings.generated_pdf_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_name = f"user_{user_id}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.pdf"
-        output_path = output_dir / output_name
+        resolved_name = output_name or f"user_{user_id}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.pdf"
+        output_path = output_dir / resolved_name
 
         metadata = self.inspect_pdf()
+        template_cfg = get_template_or_none(template_key or "") or {}
+        has_explicit_mapping = bool(template_cfg.get("text_field_map") or template_cfg.get("checkbox_field_names"))
         if metadata["fillable"]:
-            # For this Ontario form, explicit overlay is the most reliable way to ensure
-            # visible output across PDF viewers, even when AcroForm values are present.
             self._fill_form_fields(template, output_path, profile_data, template_key=template_key)
-            self._overlay_flat_pdf(output_path, output_path, profile_data, template_key=template_key)
+            # For templates without explicit field mapping, keep overlay fallback to improve visibility.
+            if not has_explicit_mapping:
+                self._overlay_flat_pdf(output_path, output_path, profile_data, template_key=template_key)
         else:
             self._overlay_flat_pdf(template, output_path, profile_data, template_key=template_key)
         return str(output_path.resolve())
@@ -69,29 +77,59 @@ class PDFPrefillService:
         other_tests = template_overlay.get("other_tests_text", "")
         page = writer.pages[0]
         annots = page.get("/Annots", [])
+        template_cfg = get_template_or_none(template_key or "") or {}
+        derived = PDFPrefillService._derive_profile_values(profile_data, other_tests)
 
-        # Anchor patient fields to approximate page coordinates, then resolve nearest text widgets.
-        text_by_anchor = {
-            "patient_last_name": ((130, 336), str(profile_data.get("patient_last_name", "")).strip()),
-            "patient_first_name": ((330, 336), str(profile_data.get("patient_first_name", "")).strip()),
-            "address": ((150, 317), str(profile_data.get("address", "")).strip()),
-            "phone_number": ((420, 282), str(profile_data.get("phone_number", "")).strip()),
-            "date_of_birth": ((355, 265), str(profile_data.get("date_of_birth", "")).strip()),
-            "health_number": ((310, 246), str(profile_data.get("health_number", "")).strip()),
-            "service_date": ((98, 223), str(profile_data.get("service_date", "")).strip()),
-            "clinician_name": ((90, 542), str(profile_data.get("clinician_name", "")).strip()),
-            "clinician_number": ((95, 523), str(profile_data.get("clinician_number", "")).strip()),
-            "additional_info": ((90, 503), str(profile_data.get("additional_info", "")).strip()),
-            "other_tests": ((250, 520), str(other_tests).strip()),
-        }
+        text_field_values: dict[str, str] = {}
+        text_field_map = template_cfg.get("text_field_map", {})
+        if text_field_map:
+            text_field_values = {
+                field_name: str(derived.get(source_key, "")).strip()
+                for source_key, field_name in text_field_map.items()
+                if str(derived.get(source_key, "")).strip()
+            }
+        else:
+            alias_values = PDFPrefillService._resolve_text_fields_by_alias(annots, derived)
+            if alias_values:
+                text_field_values.update(alias_values)
+            # Anchor patient fields to approximate page coordinates, then resolve nearest text widgets.
+            text_by_anchor = {
+                "patient_last_name": ((130, 336), str(derived.get("patient_last_name", "")).strip()),
+                "patient_first_name": ((330, 336), str(derived.get("patient_first_name", "")).strip()),
+                "address": ((150, 317), str(derived.get("address", "")).strip()),
+                "phone_number": ((420, 282), str(derived.get("phone_number", "")).strip()),
+                "date_of_birth": ((355, 265), str(derived.get("date_of_birth", "")).strip()),
+                "health_number": ((310, 246), str(derived.get("health_number", "")).strip()),
+                "service_date": ((98, 223), str(derived.get("service_date", "")).strip()),
+                "clinician_name": ((90, 542), str(derived.get("clinician_name", "")).strip()),
+                "clinician_number": ((95, 523), str(derived.get("clinician_number", "")).strip()),
+                "additional_info": ((90, 503), str(derived.get("additional_info", "")).strip()),
+                "other_tests": ((250, 520), str(derived.get("other_tests", "")).strip()),
+            }
+            for field_name, field_value in PDFPrefillService._resolve_text_fields_by_coords(annots, text_by_anchor).items():
+                text_field_values.setdefault(field_name, field_value)
 
-        text_field_values = PDFPrefillService._resolve_text_fields_by_coords(annots, text_by_anchor)
-        PDFPrefillService._apply_widget_values(page, text_field_values, checkbox_field_names=[])
+        checkbox_field_names = list(template_cfg.get("checkbox_field_names", []))
+        if not checkbox_field_names:
+            checkbox_points = [(m.get("x"), m.get("y")) for m in template_overlay.get("checkbox_marks", [])]
+            checkbox_field_names = PDFPrefillService._resolve_checkbox_fields_by_coords(annots, checkbox_points)
 
-        checkbox_points = [(m.get("x"), m.get("y")) for m in template_overlay.get("checkbox_marks", [])]
-        checkbox_field_names = PDFPrefillService._resolve_checkbox_fields_by_coords(annots, checkbox_points)
-        if checkbox_field_names:
-            PDFPrefillService._apply_widget_values(page, {}, checkbox_field_names)
+        if text_field_map or checkbox_field_names:
+            merged_values = dict(text_field_values)
+            for field_name in checkbox_field_names:
+                on_state = PDFPrefillService._resolve_checkbox_on_state(annots, field_name)
+                if on_state:
+                    merged_values[field_name] = on_state
+            try:
+                writer.update_page_form_field_values(page, merged_values, auto_regenerate=True)
+            except TypeError:
+                writer.update_page_form_field_values(page, merged_values)
+            # Ensure checkbox appearance state is explicitly marked as selected.
+            PDFPrefillService._apply_widget_values(page, {}, checkbox_field_names=checkbox_field_names)
+        else:
+            PDFPrefillService._apply_widget_values(page, text_field_values, checkbox_field_names=checkbox_field_names)
+            if checkbox_field_names:
+                PDFPrefillService._apply_widget_values(page, {}, checkbox_field_names=checkbox_field_names)
 
         writer.set_need_appearances_writer(True)
 
@@ -108,6 +146,8 @@ class PDFPrefillService:
         writer = PdfWriter(clone_from=str(template))
         first_page = writer.pages[0]
         template_overlay = build_template_overlay(template_key or "", profile_data)
+        template_cfg = get_template_or_none(template_key or "") or {}
+        derived = PDFPrefillService._derive_profile_values(profile_data, template_overlay.get("other_tests_text", ""))
 
         # Coordinate map for Ontario requisition first page (tune as needed).
         overlay_fields = {
@@ -128,19 +168,34 @@ class PDFPrefillService:
         c = canvas.Canvas(packet, pagesize=letter)
         c.setFont("Helvetica", 9)
         for field, (x, y) in overlay_fields.items():
-            value = str(profile_data.get(field, "")).strip()
+            value = str(derived.get(field, "")).strip()
             if value:
                 c.drawString(x, y, value)
 
-        for mark in template_overlay.get("checkbox_marks", []):
-            x = mark.get("x")
-            y = mark.get("y")
-            if isinstance(x, (int, float)) and isinstance(y, (int, float)):
-                c.drawString(float(x), float(y), "X")
+        text_field_map = template_cfg.get("text_field_map", {})
+        checkbox_field_names = template_cfg.get("checkbox_field_names", [])
+        if text_field_map or checkbox_field_names:
+            rects = PDFPrefillService._widget_rects_by_name(first_page)
+            for source_key, field_name in text_field_map.items():
+                value = str(derived.get(source_key, "")).strip()
+                rect = rects.get(field_name)
+                if value and rect:
+                    c.drawString(float(rect[0]) + 2, float(rect[1]) + 2, value)
 
-        other_tests_text = str(template_overlay.get("other_tests_text", "")).strip()
-        if other_tests_text:
-            c.drawString(250, 520, other_tests_text)
+            for field_name in checkbox_field_names:
+                rect = rects.get(field_name)
+                if rect:
+                    c.drawString(float(rect[0]) + 1, float(rect[1]) + 1, "X")
+        else:
+            for mark in template_overlay.get("checkbox_marks", []):
+                x = mark.get("x")
+                y = mark.get("y")
+                if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                    c.drawString(float(x), float(y), "X")
+
+            other_tests_text = str(template_overlay.get("other_tests_text", "")).strip()
+            if other_tests_text:
+                c.drawString(250, 520, other_tests_text)
         c.save()
         packet.seek(0)
 
@@ -162,6 +217,39 @@ class PDFPrefillService:
             if name:
                 resolved[name] = value
                 used.add(name)
+        return resolved
+
+    @staticmethod
+    def _resolve_text_fields_by_alias(annots: list, values: dict[str, str]) -> dict[str, str]:
+        aliases = {
+            "patient_last_name": ["lastname", "last_name", "surname", "familyname"],
+            "patient_first_name": ["firstname", "first_name", "givenname", "given_name"],
+            "health_number": ["healthnumber", "health_card", "insurance", "ohip"],
+            "date_of_birth": ["dateofbirth", "dob", "birthdate"],
+            "service_date": ["servicedate", "dateofservice", "collectiondate"],
+            "phone_number": ["phone", "telephone", "contactnumber"],
+            "address": ["address", "street"],
+        }
+        resolved: dict[str, str] = {}
+        used: set[str] = set()
+
+        for annot_ref in annots:
+            annot = annot_ref.get_object()
+            if str(annot.get("/FT") or "") != "/Tx":
+                continue
+            name = str(annot.get("/T") or "")
+            token = name.lower().replace(" ", "").replace("-", "").replace("_", "")
+            if not token:
+                continue
+            for source_key, keys in aliases.items():
+                source_value = str(values.get(source_key, "")).strip()
+                if not source_value:
+                    continue
+                if any(key in token for key in keys) and name not in used:
+                    resolved[name] = source_value
+                    used.add(name)
+                    break
+
         return resolved
 
     @staticmethod
@@ -225,4 +313,46 @@ class PDFPrefillService:
                             on_state = state_name
                             break
                 annot.update({NameObject("/V"): on_state, NameObject("/AS"): on_state})
+
+    @staticmethod
+    def _resolve_checkbox_on_state(annots: list, field_name: str) -> str | None:
+        for annot_ref in annots:
+            annot = annot_ref.get_object()
+            if str(annot.get("/T") or "") != field_name or str(annot.get("/FT") or "") != "/Btn":
+                continue
+            ap = annot.get("/AP", {}).get("/N", {})
+            if hasattr(ap, "keys"):
+                for state_name in ap.keys():
+                    if str(state_name) != "/Off":
+                        return str(state_name)
+        return None
+
+    @staticmethod
+    def _widget_rects_by_name(page) -> dict[str, list]:
+        rects: dict[str, list] = {}
+        for annot_ref in page.get("/Annots", []):
+            annot = annot_ref.get_object()
+            name = str(annot.get("/T") or "")
+            rect = annot.get("/Rect")
+            if name and rect:
+                rects[name] = rect
+        return rects
+
+    @staticmethod
+    def _derive_profile_values(profile_data: dict[str, Any], other_tests_text: str) -> dict[str, str]:
+        values = {k: str(v) for k, v in profile_data.items() if v is not None}
+        date_of_birth = str(profile_data.get("date_of_birth", "")).strip().replace("/", "-")
+        dob_parts = date_of_birth.split("-") if date_of_birth else []
+        if len(dob_parts) == 3:
+            values["dob_year"], values["dob_month"], values["dob_day"] = dob_parts[0], dob_parts[1], dob_parts[2]
+
+        phone_digits = "".join(ch for ch in str(profile_data.get("phone_number", "")) if ch.isdigit())
+        if len(phone_digits) >= 10:
+            values["phone_area"] = phone_digits[:3]
+            values["phone_rest"] = phone_digits[3:10]
+
+        values.setdefault("province", "ON")
+        values.setdefault("service_time", "09:00")
+        values["other_tests"] = str(profile_data.get("other_tests", "")).strip() or str(other_tests_text).strip()
+        return values
 
