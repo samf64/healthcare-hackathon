@@ -155,6 +155,7 @@ class FormHistoryItem(BaseModel):
 class TemplateFileOut(BaseModel):
     name: str
     preview_url: str
+    has_mapping: bool = False
 
 
 class FillTemplateRequest(BaseModel):
@@ -164,6 +165,10 @@ class FillTemplateRequest(BaseModel):
     patient_last_name: str
     patient_first_name: str
     health_number: str
+    health_version: str = ""
+    sex: str = ""
+    province: str = "ON"
+    other_provincial_registration_number: str = ""
     date_of_birth: str
     service_date: str
     phone_number: str | None = ""

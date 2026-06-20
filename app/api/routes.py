@@ -1,8 +1,8 @@
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -36,7 +36,14 @@ from app.services.form_templates import (
 )
 from app.services.pdf_prefill import PDFPrefillService
 from app.services.reminders import run_daily_reminder_job
-from app.services.template_files import list_template_files, resolve_template_file
+from app.services.template_files import (
+    DEFAULT_GLOBAL_FIELD_MAPPING,
+    delete_template_file,
+    get_template_file_by_name,
+    import_templates_from_folder,
+    list_template_files,
+    upsert_template_file,
+)
 
 router = APIRouter(prefix="/api", tags=["lab-automation"])
 
@@ -135,38 +142,70 @@ def update_user(user_id: int, payload: UserUpdate, db: Session = Depends(get_db)
 
 
 @router.get("/template-files", response_model=list[TemplateFileOut])
-def list_template_pdfs() -> list[TemplateFileOut]:
-    return [
-        TemplateFileOut(name=name, preview_url=f"/api/template-files/preview?name={name}")
-        for name in list_template_files()
-    ]
+def list_template_pdfs(db: Session = Depends(get_db)) -> list[TemplateFileOut]:
+    rows = list_template_files(db)
+    if not rows:
+        imported = import_templates_from_folder(db)
+        if imported:
+            db.commit()
+            rows = list_template_files(db)
+    return [TemplateFileOut(name=row.name, preview_url=f"/api/template-files/preview?name={row.name}") for row in rows]
 
 
 @router.get("/template-files/preview")
-def preview_template_pdf(name: str) -> FileResponse:
+def preview_template_pdf(name: str, db: Session = Depends(get_db)) -> Response:
     try:
-        path = resolve_template_file(name)
+        row = get_template_file_by_name(db, name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"Template not found: {exc}") from exc
-    return FileResponse(path=str(path), media_type="application/pdf", filename=path.name)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Template not found: {name}")
+    return Response(content=row.file_data, media_type=row.content_type, headers={"Content-Disposition": f'inline; filename=\"{row.name}\"'})
+
+
+@router.post("/template-files/upload", response_model=TemplateFileOut)
+async def upload_template_pdf(file: UploadFile = File(...), db: Session = Depends(get_db)) -> TemplateFileOut:
+    filename = (file.filename or "").strip()
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only .pdf files are allowed.")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    row = upsert_template_file(db, filename, data, "application/pdf")
+    db.commit()
+    return TemplateFileOut(name=row.name, preview_url=f"/api/template-files/preview?name={row.name}")
+
+
+@router.delete("/template-files/{name}")
+def delete_template_pdf(name: str, db: Session = Depends(get_db)) -> dict:
+    try:
+        deleted = delete_template_file(db, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Template not found: {name}")
+    db.commit()
+    return {"deleted": name}
 
 
 @router.post("/forms/fill-template", response_model=FormGenerateResponse)
 def fill_template_with_patient_info(payload: FillTemplateRequest, db: Session = Depends(get_db)) -> FormGenerateResponse:
     try:
-        template_path = resolve_template_file(payload.template_name)
+        template_row = get_template_file_by_name(db, payload.template_name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"Template not found: {exc}") from exc
+    if not template_row:
+        raise HTTPException(status_code=404, detail=f"Template not found: {payload.template_name}")
 
     user = db.scalar(select(UserProfile).where(UserProfile.email == payload.email))
     profile = {
         "patient_last_name": payload.patient_last_name,
         "patient_first_name": payload.patient_first_name,
         "health_number": payload.health_number,
+        "health_version": payload.health_version,
+        "sex": payload.sex,
+        "province": payload.province,
+        "other_provincial_registration_number": payload.other_provincial_registration_number,
         "date_of_birth": payload.date_of_birth,
         "service_date": payload.service_date,
         "phone_number": payload.phone_number or "",
@@ -190,10 +229,16 @@ def fill_template_with_patient_info(payload: FillTemplateRequest, db: Session = 
         db.add(user)
         db.flush()
 
-    generator = PDFPrefillService(template_path=str(template_path))
+    generator = PDFPrefillService(template_bytes=template_row.file_data)
     output_name = f"{Path(payload.template_name).stem}_user_{user.id}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.pdf"
     try:
-        output_file = generator.generate_prefilled_pdf(profile, user_id=user.id, output_name=output_name)
+        output_file = generator.generate_prefilled_pdf(
+            profile,
+            user_id=user.id,
+            output_name=output_name,
+            strict_field_mapping=DEFAULT_GLOBAL_FIELD_MAPPING,
+            strict_mode=True,
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

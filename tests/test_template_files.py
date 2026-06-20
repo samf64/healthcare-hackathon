@@ -1,31 +1,59 @@
-from pathlib import Path
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
-from app.config import settings
-from app.services.template_files import list_template_files, resolve_template_file
+from app.database import Base
+from app.services.template_files import (
+    DEFAULT_GLOBAL_FIELD_MAPPING,
+    delete_template_file,
+    get_template_file_by_name,
+    list_template_files,
+    upsert_template_file,
+)
 
 
-def test_list_template_files_reads_pdf_only(tmp_path):
-    original = settings.template_library_dir
-    settings.template_library_dir = str(tmp_path)
+def _session() -> Session:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    return sessionmaker(bind=engine)()
+
+
+def test_list_template_files_reads_from_database():
+    db = _session()
+    upsert_template_file(db, "a.pdf", b"%PDF-1.4 A")
+    upsert_template_file(db, "b.pdf", b"%PDF-1.4 B")
+    db.commit()
+    rows = list_template_files(db)
+    assert [r.name for r in rows] == ["a.pdf", "b.pdf"]
+
+
+def test_get_template_file_blocks_traversal_name():
+    db = _session()
     try:
-        (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4")
-        (tmp_path / "b.txt").write_text("x", encoding="utf-8")
-        files = list_template_files()
-        assert files == ["a.pdf"]
-    finally:
-        settings.template_library_dir = original
+        get_template_file_by_name(db, "../bad.pdf")
+        assert False
+    except ValueError:
+        assert True
 
 
-def test_resolve_template_file_blocks_traversal(tmp_path):
-    original = settings.template_library_dir
-    settings.template_library_dir = str(tmp_path)
-    try:
-        (tmp_path / "ok.pdf").write_bytes(b"%PDF-1.4")
-        assert resolve_template_file("ok.pdf") == Path(tmp_path / "ok.pdf").resolve()
-        try:
-            resolve_template_file("../bad.pdf")
-            assert False, "Expected ValueError for traversal"
-        except ValueError:
-            assert True
-    finally:
-        settings.template_library_dir = original
+def test_upsert_template_file_updates_existing():
+    db = _session()
+    upsert_template_file(db, "demo.pdf", b"A")
+    upsert_template_file(db, "demo.pdf", b"B")
+    db.commit()
+    row = get_template_file_by_name(db, "demo.pdf")
+    assert row is not None
+    assert row.file_data == b"B"
+
+
+def test_delete_template_file_removes_row():
+    db = _session()
+    upsert_template_file(db, "remove.pdf", b"A")
+    db.commit()
+    assert delete_template_file(db, "remove.pdf") is True
+    db.commit()
+    assert get_template_file_by_name(db, "remove.pdf") is None
+
+
+def test_default_global_mapping_exists():
+    assert "patient_last_name" in DEFAULT_GLOBAL_FIELD_MAPPING
+    assert "health_number" in DEFAULT_GLOBAL_FIELD_MAPPING

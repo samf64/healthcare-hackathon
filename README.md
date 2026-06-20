@@ -1,8 +1,8 @@
 # Lab Template Filler
 
 Simple workflow:
-- Put lab-test PDF templates in `template_library/`
-- Choose a template in the app
+- Upload lab-test PDF templates from the frontend (stored in database)
+- Choose template in app
 - Enter patient information
 - Generate a filled PDF in `generated_forms/`
 
@@ -15,7 +15,7 @@ Simple workflow:
    - `pip install -r requirements.txt`
 3. Configure env:
    - Copy `.env.example` to `.env`
-   - Set `TEMPLATE_LIBRARY_DIR` and `GENERATED_PDF_DIR` as needed
+   - Set `TEMPLATE_LIBRARY_DIR` (optional auto-import source) and `GENERATED_PDF_DIR` as needed
 
 ## Run
 
@@ -25,13 +25,22 @@ Simple workflow:
 
 1. Place template PDFs inside `template_library/`
 2. Open `http://127.0.0.1:8000/`
-3. Click **Load Templates**
-4. Pick a template and fill patient fields
-5. Click **Fill Template PDF**
+3. Upload templates using **Upload Template to DB**
+4. Click **Load Templates**
+5. Pick a template and fill patient fields
+6. Click **Fill Template PDF**
 
 ## Main Endpoints
 
-- `GET /api/template-files` list template PDFs from folder
+- `GET /api/template-files` list template PDFs from database
+- `POST /api/template-files/upload` upload template into database
+- `DELETE /api/template-files/{name}` delete template from database
 - `GET /api/template-files/preview?name=<template.pdf>` preview selected template
 - `POST /api/forms/fill-template` fill selected template with patient information
 - `GET /api/forms/history/{email}` list generated forms by user email
+
+## Mapping Behavior
+
+- The app uses one global field mapping for all templates (based on the Ontario Laboratory Requisition form).
+- No per-template remapping is required.
+- Templates must be fillable AcroForm PDFs for strict mapping to work.

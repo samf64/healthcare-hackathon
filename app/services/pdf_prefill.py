@@ -21,10 +21,15 @@ class PDFPrefillService:
     - Falls back to coordinate overlay for flat PDFs.
     """
 
-    def __init__(self, template_path: str | None = None) -> None:
+    def __init__(self, template_path: str | None = None, template_bytes: bytes | None = None) -> None:
         self.template_path = template_path or settings.requisition_pdf_path
+        self.template_bytes = template_bytes
 
     def inspect_pdf(self) -> dict[str, Any]:
+        if self.template_bytes:
+            reader = PdfReader(io.BytesIO(self.template_bytes))
+            fields = reader.get_fields() or {}
+            return {"exists": True, "fillable": bool(fields), "fields": list(fields.keys())}
         if not self.template_path:
             return {"exists": False, "fillable": False, "fields": []}
         path = Path(self.template_path)
@@ -41,12 +46,19 @@ class PDFPrefillService:
         user_id: int,
         template_key: str | None = None,
         output_name: str | None = None,
+        strict_field_mapping: dict[str, str] | None = None,
+        strict_mode: bool = False,
     ) -> str:
-        if not self.template_path:
+        if not self.template_bytes and not self.template_path:
             raise ValueError("No requisition_pdf_path configured.")
-        template = Path(self.template_path)
-        if not template.exists():
-            raise FileNotFoundError(f"Template not found: {self.template_path}")
+        template_source: str | PdfReader
+        if self.template_bytes:
+            template_source = PdfReader(io.BytesIO(self.template_bytes))
+        else:
+            template = Path(self.template_path)
+            if not template.exists():
+                raise FileNotFoundError(f"Template not found: {self.template_path}")
+            template_source = str(template)
 
         output_dir = Path(settings.generated_pdf_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -57,22 +69,33 @@ class PDFPrefillService:
         template_cfg = get_template_or_none(template_key or "") or {}
         has_explicit_mapping = bool(template_cfg.get("text_field_map") or template_cfg.get("checkbox_field_names"))
         if metadata["fillable"]:
-            self._fill_form_fields(template, output_path, profile_data, template_key=template_key)
+            self._fill_form_fields(
+                template_source,
+                output_path,
+                profile_data,
+                template_key=template_key,
+                strict_field_mapping=strict_field_mapping,
+                strict_mode=strict_mode,
+            )
             # For templates without explicit field mapping, keep overlay fallback to improve visibility.
-            if not has_explicit_mapping:
+            if not strict_mode and not has_explicit_mapping:
                 self._overlay_flat_pdf(output_path, output_path, profile_data, template_key=template_key)
         else:
-            self._overlay_flat_pdf(template, output_path, profile_data, template_key=template_key)
+            if strict_mode:
+                raise ValueError("Template is not fillable. Strict mapping mode requires an AcroForm template.")
+            self._overlay_flat_pdf(template_source, output_path, profile_data, template_key=template_key)
         return str(output_path.resolve())
 
     @staticmethod
     def _fill_form_fields(
-        template: Path,
+        template: str | PdfReader,
         output_path: Path,
         profile_data: dict[str, Any],
         template_key: str | None = None,
+        strict_field_mapping: dict[str, str] | None = None,
+        strict_mode: bool = False,
     ) -> None:
-        writer = PdfWriter(clone_from=str(template))
+        writer = PdfWriter(clone_from=template)
         template_overlay = build_template_overlay(template_key or "", profile_data)
         other_tests = template_overlay.get("other_tests_text", "")
         page = writer.pages[0]
@@ -81,14 +104,30 @@ class PDFPrefillService:
         derived = PDFPrefillService._derive_profile_values(profile_data, other_tests)
 
         text_field_values: dict[str, str] = {}
+        mapped_checkbox_fields: list[str] = []
+        mapping_override = strict_field_mapping or {}
+        if mapping_override:
+            for source_key, field_name in mapping_override.items():
+                if not field_name:
+                    continue
+                if source_key == "sex_m_checkbox" and str(derived.get("sex", "")).upper() == "M":
+                    mapped_checkbox_fields.append(str(field_name))
+                    continue
+                if source_key == "sex_f_checkbox" and str(derived.get("sex", "")).upper() == "F":
+                    mapped_checkbox_fields.append(str(field_name))
+                    continue
+                value = str(derived.get(source_key, "")).strip()
+                if value:
+                    text_field_values[str(field_name)] = value
+
         text_field_map = template_cfg.get("text_field_map", {})
-        if text_field_map:
+        if not mapping_override and text_field_map:
             text_field_values = {
                 field_name: str(derived.get(source_key, "")).strip()
                 for source_key, field_name in text_field_map.items()
                 if str(derived.get(source_key, "")).strip()
             }
-        else:
+        elif not mapping_override:
             alias_values = PDFPrefillService._resolve_text_fields_by_alias(annots, derived)
             if alias_values:
                 text_field_values.update(alias_values)
@@ -109,12 +148,15 @@ class PDFPrefillService:
             for field_name, field_value in PDFPrefillService._resolve_text_fields_by_coords(annots, text_by_anchor).items():
                 text_field_values.setdefault(field_name, field_value)
 
-        checkbox_field_names = list(template_cfg.get("checkbox_field_names", []))
-        if not checkbox_field_names:
+        checkbox_field_names = list(template_cfg.get("checkbox_field_names", [])) if not mapping_override else mapped_checkbox_fields
+        if not mapping_override and not checkbox_field_names:
             checkbox_points = [(m.get("x"), m.get("y")) for m in template_overlay.get("checkbox_marks", [])]
             checkbox_field_names = PDFPrefillService._resolve_checkbox_fields_by_coords(annots, checkbox_points)
 
-        if text_field_map or checkbox_field_names:
+        if strict_mode and not text_field_values and not checkbox_field_names:
+            raise ValueError("No mapped values could be resolved. Check template field mapping.")
+
+        if mapping_override or text_field_map or checkbox_field_names:
             merged_values = dict(text_field_values)
             for field_name in checkbox_field_names:
                 on_state = PDFPrefillService._resolve_checkbox_on_state(annots, field_name)
@@ -138,12 +180,12 @@ class PDFPrefillService:
 
     @staticmethod
     def _overlay_flat_pdf(
-        template: Path,
+        template: str | PdfReader,
         output_path: Path,
         profile_data: dict[str, Any],
         template_key: str | None = None,
     ) -> None:
-        writer = PdfWriter(clone_from=str(template))
+        writer = PdfWriter(clone_from=template)
         first_page = writer.pages[0]
         template_overlay = build_template_overlay(template_key or "", profile_data)
         template_cfg = get_template_or_none(template_key or "") or {}

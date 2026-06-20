@@ -1,6 +1,29 @@
 from pathlib import Path
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from app.config import settings
+from app.models import TemplateFile
+
+
+DEFAULT_GLOBAL_FIELD_MAPPING: dict[str, str] = {
+    "patient_last_name": "Text_24",
+    "patient_first_name": "Text_27",
+    "health_number": "Text_11",
+    "health_version": "Text_12",
+    "dob_year": "Text_13",
+    "dob_month": "Text_14",
+    "dob_day": "Text_15",
+    "phone_area": "Text_18",
+    "phone_rest": "Text_19",
+    "address": "Text_2",
+    "service_date": "Date_2",
+    "province": "Text_16",
+    "other_provincial_registration_number": "Text_17",
+    "sex_m_checkbox": "Checkbox_53",
+    "sex_f_checkbox": "Checkbox_54",
+}
 
 
 def _library_dir() -> Path:
@@ -9,22 +32,51 @@ def _library_dir() -> Path:
     return path
 
 
-def list_template_files() -> list[str]:
-    files = [p.name for p in _library_dir().glob("*.pdf") if p.is_file()]
-    files.sort()
-    return files
-
-
-def resolve_template_file(name: str) -> Path:
-    if not name or name.strip() != name:
+def _validate_name(name: str) -> str:
+    cleaned = (name or "").strip()
+    if not cleaned or "/" in cleaned or "\\" in cleaned:
         raise ValueError("Invalid template name.")
-    if "/" in name or "\\" in name:
-        raise ValueError("Invalid template name.")
+    return cleaned
 
-    path = (_library_dir() / name).resolve()
-    if path.parent != _library_dir().resolve():
-        raise ValueError("Invalid template path.")
-    if not path.exists():
-        raise FileNotFoundError(name)
-    return path
+
+def list_template_files(db: Session) -> list[TemplateFile]:
+    return db.scalars(select(TemplateFile).order_by(TemplateFile.name)).all()
+
+
+def get_template_file_by_name(db: Session, name: str) -> TemplateFile | None:
+    safe_name = _validate_name(name)
+    return db.scalar(select(TemplateFile).where(TemplateFile.name == safe_name))
+
+
+def upsert_template_file(db: Session, name: str, file_data: bytes, content_type: str = "application/pdf") -> TemplateFile:
+    safe_name = _validate_name(name)
+    existing = get_template_file_by_name(db, safe_name)
+    if existing:
+        existing.file_data = file_data
+        existing.content_type = content_type
+        db.flush()
+        return existing
+    row = TemplateFile(name=safe_name, file_data=file_data, content_type=content_type)
+    db.add(row)
+    db.flush()
+    return row
+
+
+def delete_template_file(db: Session, name: str) -> bool:
+    row = get_template_file_by_name(db, name)
+    if not row:
+        return False
+    db.delete(row)
+    db.flush()
+    return True
+
+
+def import_templates_from_folder(db: Session) -> int:
+    imported = 0
+    for path in _library_dir().glob("*.pdf"):
+        if not path.is_file():
+            continue
+        upsert_template_file(db, path.name, path.read_bytes(), "application/pdf")
+        imported += 1
+    return imported
 

@@ -9,3 +9,4 @@ pypdf
 reportlab
 email-validator
 pytest
+python-multipart

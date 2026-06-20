@@ -41,10 +41,12 @@ def home() -> str:
 </head>
 <body>
   <h1>Lab Template Filler</h1>
-  <p>Select a PDF template from your folder and fill it with patient information.</p>
+  <p>Templates are stored in the database. Upload/delete them from here, then fill patient info.</p>
 
   <section>
     <h2>1) Template Files</h2>
+    <input id="template_upload" type="file" accept=".pdf,application/pdf" />
+    <button onclick="uploadTemplate()">Upload Template to DB</button>
     <button onclick="loadTemplates()">Load Templates</button>
     <div id="templates"></div>
     <iframe id="template_preview" title="Template preview" style="width:100%;height:500px;border:1px solid #ddd;border-radius:6px;"></iframe>
@@ -57,6 +59,14 @@ def home() -> str:
     <input id="patient_last_name" placeholder="Patient last name" />
     <input id="patient_first_name" placeholder="Patient first name" />
     <input id="health_number" placeholder="Insurance/health number" />
+    <input id="health_version" placeholder="Health version (2 letters)" />
+    <select id="sex">
+      <option value="">Sex (optional)</option>
+      <option value="M">M</option>
+      <option value="F">F</option>
+    </select>
+    <input id="province" placeholder="Province (e.g. ON)" />
+    <input id="other_provincial_registration_number" placeholder="Other provincial reg number (optional)" />
     <input id="date_of_birth" placeholder="Date of birth (YYYY-MM-DD)" />
     <input id="service_date" placeholder="Service date (YYYY-MM-DD)" />
     <input id="phone_number" placeholder="Phone number (optional)" />
@@ -91,16 +101,33 @@ def home() -> str:
 
         const row = document.createElement('div');
         row.style.marginBottom = '10px';
-        row.innerHTML = `<strong>${t.name}</strong><br/><a href="${t.preview_url}" target="_blank">Open Preview PDF</a>`;
+        row.innerHTML = `<strong>${t.name}</strong><br/><a href="${t.preview_url}" target="_blank">Open Preview PDF</a> <button data-name="${t.name}">Delete</button>`;
         row.onclick = () => {
           document.getElementById('template_preview').src = t.preview_url;
           document.getElementById('template_name').value = t.name;
+        };
+        row.querySelector('button').onclick = async (event) => {
+          event.stopPropagation();
+          const name = event.target.getAttribute('data-name');
+          await fetch(`/api/template-files/${encodeURIComponent(name)}`, { method: 'DELETE' });
+          await loadTemplates();
         };
         wrap.appendChild(row);
         if (i === 0) {
           document.getElementById('template_preview').src = t.preview_url;
         }
       });
+    }
+
+    async function uploadTemplate() {
+      const input = document.getElementById('template_upload');
+      if (!input.files || !input.files[0]) return;
+      const form = new FormData();
+      form.append('file', input.files[0]);
+      const res = await fetch('/api/template-files/upload', { method: 'POST', body: form });
+      document.getElementById('generate_result').textContent = JSON.stringify(await res.json(), null, 2);
+      input.value = '';
+      await loadTemplates();
     }
 
     async function generate() {
@@ -118,6 +145,10 @@ def home() -> str:
         patient_last_name: profile_patch.patient_last_name,
         patient_first_name: profile_patch.patient_first_name,
         health_number: profile_patch.health_number,
+        health_version: document.getElementById('health_version').value,
+        sex: document.getElementById('sex').value,
+        province: document.getElementById('province').value || 'ON',
+        other_provincial_registration_number: document.getElementById('other_provincial_registration_number').value,
         date_of_birth: profile_patch.date_of_birth,
         service_date: profile_patch.service_date,
         phone_number: document.getElementById('phone_number').value,
