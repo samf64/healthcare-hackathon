@@ -1,5 +1,3 @@
-import './style.css'
-
 const API_BASE = ''
 
 const state = {
@@ -48,7 +46,10 @@ function render() {
             <button id="uploadTemplateBtn" class="secondary-btn">Upload PDF</button>
           </div>
           <div id="templatesList" class="template-list"></div>
-          <iframe id="templatePreview" class="preview-frame" title="Template preview"></iframe>
+          <details id="templatePreviewPanel">
+            <summary>Template Preview (open/close)</summary>
+            <iframe id="templatePreview" class="preview-frame" title="Template preview"></iframe>
+          </details>
         </section>
 
         <section class="panel panel--right">
@@ -76,6 +77,7 @@ function render() {
   const templatesList = document.getElementById('templatesList')
   const templateSelect = document.getElementById('templateSelect')
   const templatePreview = document.getElementById('templatePreview')
+  const templatePreviewPanel = document.getElementById('templatePreviewPanel')
   const resultOutput = document.getElementById('resultOutput')
   const patientPresetSelect = document.getElementById('patientPresetSelect')
 
@@ -85,10 +87,17 @@ function render() {
   document.getElementById('uploadPatientPresetBtn').addEventListener('click', uploadPatientPreset)
   document.getElementById('deletePatientPresetBtn').addEventListener('click', deletePatientPreset)
   document.getElementById('fillFromPresetBtn').addEventListener('click', fillTemplateFromPreset)
-  patientPresetSelect.addEventListener('change', async () => {
-    const selectedId = patientPresetSelect.value
-    state.selectedPresetId = selectedId
+  patientPresetSelect.addEventListener('change', () => {
+    state.selectedPresetId = patientPresetSelect.value
   })
+
+  function showTemplatePreview(template) {
+    if (!template) return
+    state.selectedTemplate = template.name
+    templateSelect.value = template.name
+    templatePreview.src = template.preview_url
+    templatePreviewPanel.open = true
+  }
 
   function populateTemplateOptions() {
     templateSelect.innerHTML = ''
@@ -100,26 +109,30 @@ function render() {
     })
 
     if (state.templates.length > 0) {
-      state.selectedTemplate = state.templates[0].name
-      templateSelect.value = state.selectedTemplate
-      templatePreview.src = state.templates[0].preview_url
+      showTemplatePreview(state.templates[0])
     }
   }
 
   function renderTemplates() {
     templatesList.innerHTML = ''
     state.templates.forEach((template) => {
-      const item = document.createElement('button')
-      item.type = 'button'
+      const item = document.createElement('div')
       item.className = 'template-card'
       item.innerHTML = `
         <strong>${template.name}</strong>
-        <span>Open preview</span>
+        <span>
+          <button type="button" class="secondary-btn" data-action="preview">Preview</button>
+          <button type="button" class="secondary-btn" data-action="delete">Delete</button>
+        </span>
       `
-      item.addEventListener('click', () => {
-        state.selectedTemplate = template.name
-        templateSelect.value = template.name
-        templatePreview.src = template.preview_url
+      item.querySelector('[data-action="preview"]').addEventListener('click', () => {
+        showTemplatePreview(template)
+      })
+      item.querySelector('[data-action="delete"]').addEventListener('click', async () => {
+        await fetch(`${API_BASE}/api/template-files/${encodeURIComponent(template.name)}`, {
+          method: 'DELETE',
+        })
+        await loadTemplates()
       })
       templatesList.appendChild(item)
     })
