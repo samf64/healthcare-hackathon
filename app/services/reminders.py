@@ -1,12 +1,12 @@
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 from dateutil.relativedelta import relativedelta
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Cadence, ReminderLog, ReminderStage, UserProfile
+from app.models import Cadence, PatientTemplateReminder, ReminderLog, ReminderStage, UserProfile
 from app.security import generate_review_token
 from app.services.audit import log_audit_event
 from app.services.email_notifier import EmailNotifier
@@ -41,7 +41,7 @@ def _build_message(user: UserProfile, due_date: date, stage: ReminderStage) -> t
 
     subject = f"Lab requisition reminder for {user.full_name}"
     body = (
-        f"Hello {user.full_name},\n\n"
+        "Hello Doctor Demo,\n\n"
         f"Your laboratory requisition form is due on {due_date.isoformat()} "
         f"({stage.value.replace('_', ' ')}).\n"
         f"Use this secure link to review and pre-fill your form:\n{review_url}\n\n"
@@ -98,4 +98,45 @@ def run_daily_reminder_job(db: Session, notifier: EmailNotifier, today: date | N
 
     db.commit()
     return outcome
+
+
+def build_patient_template_reminder_message(full_name: str, template_name: str, patient_file_name: str) -> tuple[str, str]:
+    subject = f"Reminder: Submit lab requisition for {full_name}"
+    body = (
+        "Hello Doctor Demo,\n\n"
+        "This is your reminder to submit your lab requisition form.\n"
+        f"Template: {template_name}\n"
+        f"Patient file: {patient_file_name}\n\n"
+        "Open LabRat, generate or review the PDF, and submit it to your provider.\n"
+    )
+    return subject, body
+
+
+def run_patient_template_reminder_job(db: Session, notifier: EmailNotifier, today: date | None = None) -> tuple[int, int]:
+    today = today or date.today()
+    reminders = db.scalars(
+        select(PatientTemplateReminder).where(
+            PatientTemplateReminder.is_active.is_(True),
+            PatientTemplateReminder.next_send_on <= today,
+        )
+    ).all()
+
+    sent = 0
+    failed = 0
+    for reminder in reminders:
+        subject, body = build_patient_template_reminder_message(
+            full_name=reminder.full_name,
+            template_name=reminder.template_name,
+            patient_file_name=f"#{reminder.patient_json_file_id}",
+        )
+        ok, _ = notifier.send_email(reminder.email, subject, body)
+        if ok:
+            sent += 1
+            reminder.last_sent_at = datetime.utcnow()
+            reminder.next_send_on = reminder.next_send_on + relativedelta(months=+reminder.months_interval)
+            reminder.updated_at = datetime.utcnow()
+        else:
+            failed += 1
+    db.commit()
+    return sent, failed
 

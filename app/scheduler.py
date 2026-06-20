@@ -3,7 +3,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.database import SessionLocal
 from app.services.email_notifier import EmailNotifier
-from app.services.reminders import run_daily_reminder_job
+from app.services.reminders import run_daily_reminder_job, run_patient_template_reminder_job
 
 
 scheduler = BackgroundScheduler(timezone="UTC")
@@ -13,6 +13,7 @@ def _run_scheduled_reminders() -> None:
     db = SessionLocal()
     try:
         run_daily_reminder_job(db=db, notifier=EmailNotifier())
+        run_patient_template_reminder_job(db=db, notifier=EmailNotifier())
     finally:
         db.close()
 

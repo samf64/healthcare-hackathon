@@ -8,7 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Cadence, GeneratedForm, PatientJsonFile, RequisitionRequest, RequisitionTemplate, UserProfile
+from dateutil.relativedelta import relativedelta
+
+from app.models import Cadence, GeneratedForm, PatientJsonFile, PatientTemplateReminder, RequisitionRequest, RequisitionTemplate, UserProfile
 from app.schemas import (
     FillTemplateRequest,
     PatientJsonFileContentOut,
@@ -19,6 +21,8 @@ from app.schemas import (
     FormTemplateOut,
     GenerateFromTemplateRequest,
     MarkCompleteRequest,
+    PatientTemplateReminderRequest,
+    PatientTemplateReminderResponse,
     ReminderRunResult,
     ReminderSubscriptionOut,
     ReminderSubscriptionRequest,
@@ -38,7 +42,7 @@ from app.services.form_templates import (
     list_templates as list_form_templates,
 )
 from app.services.pdf_prefill import PDFPrefillService
-from app.services.reminders import run_daily_reminder_job
+from app.services.reminders import build_patient_template_reminder_message, run_daily_reminder_job
 from app.services.template_files import (
     delete_template_file,
     get_template_file_by_name,
@@ -62,6 +66,14 @@ def _get_user_by_email_or_404(db: Session, email: str) -> UserProfile:
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
     return user
+
+
+def _patient_value(data: dict, keys: list[str], fallback: str = "") -> str:
+    for key in keys:
+        value = data.get(key)
+        if value is not None and str(value).strip() != "":
+            return str(value).strip()
+    return fallback
 
 
 @router.get("/users", response_model=list[UserOut])
@@ -242,6 +254,82 @@ def delete_patient_json_file(file_id: int, db: Session = Depends(get_db)) -> dic
     db.delete(row)
     db.commit()
     return {"deleted": deleted_name}
+
+
+@router.post("/reminders/patient-template", response_model=PatientTemplateReminderResponse)
+def create_patient_template_reminder(
+    payload: PatientTemplateReminderRequest,
+    db: Session = Depends(get_db),
+) -> PatientTemplateReminderResponse:
+    patient_row = db.get(PatientJsonFile, payload.patient_json_file_id)
+    if not patient_row:
+        raise HTTPException(status_code=404, detail="Patient JSON file not found.")
+
+    try:
+        template_row = get_template_file_by_name(db, payload.template_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not template_row:
+        raise HTTPException(status_code=404, detail=f"Template not found: {payload.template_name}")
+
+    data = patient_row.data or {}
+    email = str(payload.recipient_email).strip() if payload.recipient_email else _patient_value(data, ["email"])
+    if not email:
+        raise HTTPException(status_code=400, detail="Provide `recipient_email` or include `email` in the selected patient JSON.")
+    full_name = _patient_value(data, ["full_name", "fullName"], "Patient")
+
+    if payload.mode.value == "instant":
+        subject, body = build_patient_template_reminder_message(
+            full_name=full_name,
+            template_name=payload.template_name,
+            patient_file_name=patient_row.name,
+        )
+        ok, details = EmailNotifier().send_email(email, subject, body)
+        return PatientTemplateReminderResponse(
+            mode=payload.mode,
+            sent_now=ok,
+            detail=details if ok else f"failed: {details}",
+        )
+
+    months = payload.months or 0
+    if months < 1 or months > 24:
+        raise HTTPException(status_code=400, detail="For months mode, `months` must be between 1 and 24.")
+
+    next_send = datetime.utcnow().date() + relativedelta(months=+months)
+    existing = db.scalar(
+        select(PatientTemplateReminder).where(
+            PatientTemplateReminder.patient_json_file_id == payload.patient_json_file_id,
+            PatientTemplateReminder.template_name == payload.template_name,
+            PatientTemplateReminder.email == email,
+            PatientTemplateReminder.is_active.is_(True),
+        )
+    )
+    if existing:
+        existing.full_name = full_name
+        existing.months_interval = months
+        existing.next_send_on = next_send
+        existing.updated_at = datetime.utcnow()
+        row = existing
+    else:
+        row = PatientTemplateReminder(
+            patient_json_file_id=payload.patient_json_file_id,
+            template_name=payload.template_name,
+            full_name=full_name,
+            email=email,
+            months_interval=months,
+            next_send_on=next_send,
+            is_active=True,
+        )
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return PatientTemplateReminderResponse(
+        mode=payload.mode,
+        sent_now=False,
+        detail=f"Reminder scheduled every {months} month(s).",
+        reminder_id=row.id,
+        next_send_on=row.next_send_on,
+    )
 
 
 @router.post("/forms/fill-template", response_model=FormGenerateResponse)

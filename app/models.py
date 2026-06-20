@@ -109,6 +109,22 @@ class PatientJsonFile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class PatientTemplateReminder(Base):
+    __tablename__ = "patient_template_reminders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    patient_json_file_id: Mapped[int] = mapped_column(ForeignKey("patient_json_files.id"), index=True)
+    template_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    full_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    months_interval: Mapped[int] = mapped_column(Integer, nullable=False)
+    next_send_on: Mapped[date] = mapped_column(Date, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class RequisitionRequest(Base):
     __tablename__ = "requisition_requests"
 

@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, EmailStr, Field
@@ -188,4 +189,25 @@ class FillTemplateRequest(BaseModel):
     service_date: str = ""
     phone_number: str | None = ""
     address: str | None = ""
+
+
+class ReminderMode(str, Enum):
+    INSTANT = "instant"
+    MONTHS = "months"
+
+
+class PatientTemplateReminderRequest(BaseModel):
+    patient_json_file_id: int
+    template_name: str
+    mode: ReminderMode
+    months: int | None = None
+    recipient_email: EmailStr | None = None
+
+
+class PatientTemplateReminderResponse(BaseModel):
+    mode: ReminderMode
+    sent_now: bool
+    detail: str
+    reminder_id: int | None = None
+    next_send_on: date | None = None
 
