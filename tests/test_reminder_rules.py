@@ -62,3 +62,23 @@ def test_run_daily_reminder_job_deduplicates_same_stage():
     assert second.reminders_sent == 0
     assert notifier.calls == 1
 
+
+def test_run_daily_reminder_job_skips_disabled_reminders():
+    db = _session()
+    db.add(
+        UserProfile(
+            full_name="No Reminder",
+            email="noreminder@example.com",
+            cadence=Cadence.SIX_MONTHS,
+            last_completed_date=date(2026, 6, 1),
+            profile_data={"reminder_enabled": False},
+        )
+    )
+    db.commit()
+
+    notifier = FakeNotifier()
+    result = run_daily_reminder_job(db, notifier=notifier, today=date(2026, 11, 1))
+    assert result.scanned_users == 0
+    assert result.reminders_sent == 0
+    assert notifier.calls == 0
+

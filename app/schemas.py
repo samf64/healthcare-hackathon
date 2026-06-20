@@ -54,3 +54,50 @@ class FormGenerateResponse(BaseModel):
 class MarkCompleteRequest(BaseModel):
     completed_on: date = Field(default_factory=date.today)
 
+
+class FormTemplateOut(BaseModel):
+    key: str
+    title: str
+    description: str
+    suggested_fields: list[str]
+
+
+class ReminderSubscriptionRequest(BaseModel):
+    full_name: str
+    email: EmailStr
+    cadence: Cadence | None = None
+    reminder_enabled: bool = True
+    template_key: str
+    last_completed_date: date = Field(default_factory=date.today)
+    profile_data: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReminderSubscriptionOut(BaseModel):
+    id: int
+    full_name: str
+    email: EmailStr
+    cadence: Cadence
+    template_key: str
+    last_completed_date: date
+    reminder_enabled: bool
+
+    class Config:
+        from_attributes = True
+
+
+class GenerateFromTemplateRequest(BaseModel):
+    full_name: str
+    email: EmailStr
+    template_key: str
+    cadence: Cadence | None = None
+    reminder_enabled: bool = False
+    last_completed_date: date = Field(default_factory=date.today)
+    profile_patch: dict[str, Any] = Field(default_factory=dict)
+    is_final: bool = False
+
+
+class FormHistoryItem(BaseModel):
+    file_path: str
+    created_at: datetime
+    is_final: bool
+

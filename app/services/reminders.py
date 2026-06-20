@@ -53,9 +53,10 @@ def _build_message(user: UserProfile, due_date: date, stage: ReminderStage) -> t
 def run_daily_reminder_job(db: Session, notifier: EmailNotifier, today: date | None = None) -> ReminderOutcome:
     today = today or date.today()
     users = db.scalars(select(UserProfile).where(UserProfile.is_active.is_(True))).all()
-    outcome = ReminderOutcome(scanned_users=len(users))
+    eligible_users = [user for user in users if bool((user.profile_data or {}).get("reminder_enabled", True))]
+    outcome = ReminderOutcome(scanned_users=len(eligible_users))
 
-    for user in users:
+    for user in eligible_users:
         due = next_due_date(user.last_completed_date, user.cadence)
         stage = determine_stage(today=today, due_date=due)
         if not stage:
