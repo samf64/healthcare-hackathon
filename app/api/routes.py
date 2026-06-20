@@ -49,12 +49,17 @@ def _template_or_404(template_key: str) -> dict:
 
 def _get_user_by_email_or_404(db: Session, email: str) -> UserProfile:
     user = db.scalar(select(UserProfile).where(UserProfile.email == email))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    return user
+
+
 @router.get("/users", response_model=list[UserOut])
 def list_users(db: Session = Depends(get_db)) -> list[UserProfile]:
     return db.scalars(select(UserProfile).order_by(UserProfile.id)).all()
 
 
-@router.post("/templates", response_model=RequisitionTemplateOut)
+@router.post("/requisition-templates", response_model=RequisitionTemplateOut)
 def create_template(
     payload: RequisitionTemplateCreate,
     db: Session = Depends(get_db),
@@ -72,7 +77,7 @@ def create_template(
     return template
 
 
-@router.get("/templates", response_model=list[RequisitionTemplateOut])
+@router.get("/requisition-templates", response_model=list[RequisitionTemplateOut])
 def list_templates(db: Session = Depends(get_db)) -> list[RequisitionTemplate]:
     return db.scalars(select(RequisitionTemplate).order_by(RequisitionTemplate.id)).all()
 
@@ -115,6 +120,17 @@ def update_user(user_id: int, payload: UserUpdate, db: Session = Depends(get_db)
     user = db.get(UserProfile, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
+
+    update_data = payload.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        if key == "profile_data" and user.profile_data:
+            user.profile_data = {**user.profile_data, **value}
+        else:
+            setattr(user, key, value)
+
+    user.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(user)
     return user
 
 
