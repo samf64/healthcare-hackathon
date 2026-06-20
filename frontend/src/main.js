@@ -67,6 +67,15 @@ function render() {
             <select name="template_name" id="templateSelect"></select>
             <button id="fillFromPresetBtn" type="button" class="primary-btn wide">Fill Template PDF</button>
           </div>
+          <div class="form-grid" style="margin-top: 12px;">
+            <select id="reminderMode">
+              <option value="instant">Instant email</option>
+              <option value="months">After number of months</option>
+            </select>
+            <input id="reminderRecipient" type="email" placeholder="Reminder recipient email (optional)" />
+            <input id="reminderMonths" type="number" min="1" max="24" value="6" placeholder="Months (1-24)" />
+            <button id="setReminderBtn" type="button" class="secondary-btn wide">Set Reminder</button>
+          </div>
           <pre id="resultOutput" class="result-output"></pre>
         </section>
       </main>
@@ -78,6 +87,9 @@ function render() {
   const templatePreview = document.getElementById('templatePreview')
   const resultOutput = document.getElementById('resultOutput')
   const patientPresetSelect = document.getElementById('patientPresetSelect')
+  const reminderMode = document.getElementById('reminderMode')
+  const reminderRecipient = document.getElementById('reminderRecipient')
+  const reminderMonths = document.getElementById('reminderMonths')
 
   document.getElementById('loadTemplatesBtn').addEventListener('click', loadTemplates)
   document.getElementById('loadPatientPresetsBtn').addEventListener('click', loadPatientPresets)
@@ -85,6 +97,14 @@ function render() {
   document.getElementById('uploadPatientPresetBtn').addEventListener('click', uploadPatientPreset)
   document.getElementById('deletePatientPresetBtn').addEventListener('click', deletePatientPreset)
   document.getElementById('fillFromPresetBtn').addEventListener('click', fillTemplateFromPreset)
+  document.getElementById('setReminderBtn').addEventListener('click', setReminder)
+  function updateReminderModeUI() {
+    const isMonths = reminderMode.value === 'months'
+    reminderMonths.disabled = !isMonths
+    reminderMonths.style.display = isMonths ? '' : 'none'
+  }
+
+  reminderMode.addEventListener('change', updateReminderModeUI)
   patientPresetSelect.addEventListener('change', async () => {
     const selectedId = patientPresetSelect.value
     state.selectedPresetId = selectedId
@@ -239,8 +259,48 @@ function render() {
     })
     resultOutput.textContent = JSON.stringify(await fillResponse.json(), null, 2)
   }
+
+  async function setReminder() {
+    if (!state.selectedPresetId) {
+      resultOutput.textContent = 'Select a patient JSON file first.'
+      return
+    }
+    if (!templateSelect.value) {
+      resultOutput.textContent = 'Select a template first.'
+      return
+    }
+    const mode = reminderMode.value
+    const months = Number(reminderMonths.value || 0)
+    const payload = {
+      patient_json_file_id: Number(state.selectedPresetId),
+      template_name: templateSelect.value,
+      mode,
+      months: mode === 'months' ? months : null,
+      recipient_email: reminderRecipient.value.trim() || null,
+    }
+    const response = await fetch(`${API_BASE}/api/reminders/patient-template`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    resultOutput.textContent = JSON.stringify(await response.json(), null, 2)
+  }
+
+  let isRefreshing = false
+  async function refreshAllData() {
+    if (isRefreshing) return
+    isRefreshing = true
+    try {
+      await Promise.all([loadTemplates(), loadPatientPresets()])
+    } finally {
+      isRefreshing = false
+    }
+  }
+
+  window.addEventListener('pageshow', refreshAllData)
+  window.addEventListener('focus', refreshAllData)
+  updateReminderModeUI()
+  refreshAllData()
 }
 
 render()
-loadTemplates()
-loadPatientPresets()
