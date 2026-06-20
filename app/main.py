@@ -49,43 +49,33 @@ def home() -> str:
     <button onclick="uploadTemplate()">Upload Template to DB</button>
     <button onclick="loadTemplates()">Load Templates</button>
     <div id="templates"></div>
-    <iframe id="template_preview" title="Template preview" style="width:100%;height:500px;border:1px solid #ddd;border-radius:6px;"></iframe>
+    <details id="template_preview_panel" style="margin-top:10px;">
+      <summary>Template Preview (open/close)</summary>
+      <iframe id="template_preview" title="Template preview" style="width:100%;height:500px;border:1px solid #ddd;border-radius:6px;"></iframe>
+    </details>
   </section>
 
   <section>
     <h2>2) Fill Selected Template</h2>
-    <input id="full_name" placeholder="Full name" />
-    <input id="email" placeholder="Email" />
-    <input id="patient_last_name" placeholder="Patient last name" />
-    <input id="patient_first_name" placeholder="Patient first name" />
-    <input id="health_number" placeholder="Insurance/health number" />
-    <input id="health_version" placeholder="Health version (2 letters)" />
-    <select id="sex">
-      <option value="">Sex (optional)</option>
-      <option value="M">M</option>
-      <option value="F">F</option>
-    </select>
-    <input id="province" placeholder="Province (e.g. ON)" />
-    <input id="other_provincial_registration_number" placeholder="Other provincial reg number (optional)" />
-    <input id="date_of_birth" placeholder="Date of birth (YYYY-MM-DD)" />
-    <input id="service_date" placeholder="Service date (YYYY-MM-DD)" />
-    <input id="phone_number" placeholder="Phone number (optional)" />
-    <input id="address" placeholder="Address (optional)" />
+    <input id="patient_json_db_upload" type="file" accept=".json,application/json" />
+    <button onclick="uploadPatientJsonToDb()">Upload Patient JSON to DB</button>
+    <button onclick="refreshPatientJsonDb()">Refresh Saved Patient Files</button>
+    <select id="patient_json_db_select"></select>
+    <button onclick="deleteSelectedPatientJsonDb()">Delete Selected Patient File</button>
     <select id="template_name"></select>
     <button onclick="generate()">Fill Template PDF</button>
     <pre id="generate_result"></pre>
   </section>
 
-  <section>
-    <h2>3) Stored Filled Forms</h2>
-    <input id="history_email" placeholder="Email for history lookup" />
-    <button onclick="loadHistory()">Load Form History</button>
-    <pre id="history"></pre>
-  </section>
-
   <p>API docs: <a href="/docs" target="_blank">/docs</a></p>
 
   <script>
+    function previewTemplate(name, previewUrl) {
+      document.getElementById('template_preview').src = previewUrl;
+      document.getElementById('template_name').value = name;
+      document.getElementById('template_preview_panel').open = true;
+    }
+
     async function loadTemplates() {
       const res = await fetch('/api/template-files');
       const templates = await res.json();
@@ -101,12 +91,13 @@ def home() -> str:
 
         const row = document.createElement('div');
         row.style.marginBottom = '10px';
-        row.innerHTML = `<strong>${t.name}</strong><br/><a href="${t.preview_url}" target="_blank">Open Preview PDF</a> <button data-name="${t.name}">Delete</button>`;
-        row.onclick = () => {
-          document.getElementById('template_preview').src = t.preview_url;
-          document.getElementById('template_name').value = t.name;
+        row.innerHTML = `<strong>${t.name}</strong><br/><button data-action="preview" data-name="${t.name}">Preview</button> <a href="${t.preview_url}" target="_blank">Open in new tab</a> <button data-action="delete" data-name="${t.name}">Delete</button>`;
+        row.querySelector('[data-action="preview"]').onclick = (event) => {
+          event.stopPropagation();
+          const name = event.target.getAttribute('data-name');
+          previewTemplate(name, t.preview_url);
         };
-        row.querySelector('button').onclick = async (event) => {
+        row.querySelector('[data-action="delete"]').onclick = async (event) => {
           event.stopPropagation();
           const name = event.target.getAttribute('data-name');
           await fetch(`/api/template-files/${encodeURIComponent(name)}`, { method: 'DELETE' });
@@ -114,7 +105,7 @@ def home() -> str:
         };
         wrap.appendChild(row);
         if (i === 0) {
-          document.getElementById('template_preview').src = t.preview_url;
+          previewTemplate(t.name, t.preview_url);
         }
       });
     }
@@ -130,44 +121,91 @@ def home() -> str:
       await loadTemplates();
     }
 
+    function _valueFrom(obj, keys, fallback = '') {
+      for (const key of keys) {
+        if (obj[key] !== undefined && obj[key] !== null && String(obj[key]).trim() !== '') {
+          return String(obj[key]).trim();
+        }
+      }
+      return fallback;
+    }
+
+    async function refreshPatientJsonDb() {
+      const res = await fetch('/api/patient-json-files');
+      const files = await res.json();
+      const select = document.getElementById('patient_json_db_select');
+      select.innerHTML = '';
+      files.forEach((f) => {
+        const opt = document.createElement('option');
+        opt.value = f.id;
+        opt.textContent = `${f.name} (#${f.id})`;
+        select.appendChild(opt);
+      });
+    }
+
+    async function uploadPatientJsonToDb() {
+      const input = document.getElementById('patient_json_db_upload');
+      if (!input.files || !input.files[0]) return;
+      const form = new FormData();
+      form.append('file', input.files[0]);
+      const res = await fetch('/api/patient-json-files/upload', { method: 'POST', body: form });
+      document.getElementById('generate_result').textContent = JSON.stringify(await res.json(), null, 2);
+      input.value = '';
+      await refreshPatientJsonDb();
+    }
+
+    async function deleteSelectedPatientJsonDb() {
+      const select = document.getElementById('patient_json_db_select');
+      if (!select.value) return;
+      await fetch(`/api/patient-json-files/${encodeURIComponent(select.value)}`, { method: 'DELETE' });
+      await refreshPatientJsonDb();
+      document.getElementById('generate_result').textContent = 'Deleted selected patient JSON file.';
+    }
+
     async function generate() {
-      const profile_patch = {
-        patient_last_name: document.getElementById('patient_last_name').value,
-        patient_first_name: document.getElementById('patient_first_name').value,
-        health_number: document.getElementById('health_number').value,
-        date_of_birth: document.getElementById('date_of_birth').value,
-        service_date: document.getElementById('service_date').value
-      };
+      const patientSelect = document.getElementById('patient_json_db_select');
+      if (!patientSelect.value) {
+        document.getElementById('generate_result').textContent = 'Select a saved patient JSON file first.';
+        return;
+      }
+      const patientRes = await fetch(`/api/patient-json-files/${encodeURIComponent(patientSelect.value)}`);
+      const patientPayload = await patientRes.json();
+      const data = patientPayload.data || {};
       const body = {
-        full_name: document.getElementById('full_name').value,
-        email: document.getElementById('email').value,
+        full_name: _valueFrom(data, ['full_name', 'fullName'], 'Patient'),
+        email: _valueFrom(data, ['email']),
         template_name: document.getElementById('template_name').value,
-        patient_last_name: profile_patch.patient_last_name,
-        patient_first_name: profile_patch.patient_first_name,
-        health_number: profile_patch.health_number,
-        health_version: document.getElementById('health_version').value,
-        sex: document.getElementById('sex').value,
-        province: document.getElementById('province').value || 'ON',
-        other_provincial_registration_number: document.getElementById('other_provincial_registration_number').value,
-        date_of_birth: profile_patch.date_of_birth,
-        service_date: profile_patch.service_date,
-        phone_number: document.getElementById('phone_number').value,
-        address: document.getElementById('address').value
+        patient_last_name: _valueFrom(data, ['patient_last_name', 'last_name', 'lastName']),
+        patient_first_name: _valueFrom(
+          data,
+          ['patient_first_name', 'patient_first_and_middle_names', 'first_and_middle_names', 'first_name', 'firstName']
+        ),
+        health_number: _valueFrom(data, ['health_number', 'healthNumber', 'insurance_number']),
+        health_version: _valueFrom(data, ['health_version', 'healthVersion']),
+        sex: _valueFrom(data, ['sex', 'gender']).toUpperCase(),
+        province: _valueFrom(data, ['province'], 'ON').toUpperCase(),
+        other_provincial_registration_number: _valueFrom(
+          data,
+          ['other_provincial_registration_number', 'otherProvincialRegistrationNumber']
+        ),
+        date_of_birth: _valueFrom(data, ['date_of_birth', 'dob', 'dateOfBirth']),
+        phone_number: _valueFrom(data, ['phone_number', 'phone', 'patients_telephone_contact_number']),
+        address: _valueFrom(data, ['address', 'patients_address'])
       };
+      if (!body.email) {
+        document.getElementById('generate_result').textContent = 'Selected patient JSON is missing `email`.';
+        return;
+      }
       const res = await fetch('/api/forms/fill-template', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
       document.getElementById('generate_result').textContent = JSON.stringify(await res.json(), null, 2);
-      document.getElementById('history_email').value = body.email;
     }
 
-    async function loadHistory() {
-      const email = encodeURIComponent(document.getElementById('history_email').value);
-      const res = await fetch(`/api/forms/history/${email}`);
-      document.getElementById('history').textContent = JSON.stringify(await res.json(), null, 2);
-    }
+    loadTemplates();
+    refreshPatientJsonDb();
   </script>
 </body>
 </html>

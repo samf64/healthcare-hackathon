@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -7,9 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import GeneratedForm, RequisitionRequest, RequisitionTemplate, UserProfile, Cadence
+from app.models import Cadence, GeneratedForm, PatientJsonFile, RequisitionRequest, RequisitionTemplate, UserProfile
 from app.schemas import (
     FillTemplateRequest,
+    PatientJsonFileContentOut,
+    PatientJsonFileOut,
     FormGenerateResponse,
     FormHistoryItem,
     TemplateFileOut,
@@ -37,11 +40,11 @@ from app.services.form_templates import (
 from app.services.pdf_prefill import PDFPrefillService
 from app.services.reminders import run_daily_reminder_job
 from app.services.template_files import (
-    DEFAULT_GLOBAL_FIELD_MAPPING,
     delete_template_file,
     get_template_file_by_name,
     import_templates_from_folder,
     list_template_files,
+    load_global_field_mapping,
     upsert_template_file,
 )
 
@@ -188,6 +191,59 @@ def delete_template_pdf(name: str, db: Session = Depends(get_db)) -> dict:
     return {"deleted": name}
 
 
+@router.get("/patient-json-files", response_model=list[PatientJsonFileOut])
+def list_patient_json_files(db: Session = Depends(get_db)) -> list[PatientJsonFile]:
+    return db.scalars(select(PatientJsonFile).order_by(PatientJsonFile.name)).all()
+
+
+@router.post("/patient-json-files/upload", response_model=PatientJsonFileOut)
+async def upload_patient_json_file(file: UploadFile = File(...), db: Session = Depends(get_db)) -> PatientJsonFileOut:
+    filename = (file.filename or "").strip()
+    if not filename.lower().endswith(".json"):
+        raise HTTPException(status_code=400, detail="Only .json files are allowed.")
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Uploaded JSON file is empty.")
+
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="JSON root must be an object.")
+
+    row = db.scalar(select(PatientJsonFile).where(PatientJsonFile.name == filename))
+    if row:
+        row.data = parsed
+        row.updated_at = datetime.utcnow()
+    else:
+        row = PatientJsonFile(name=filename, data=parsed)
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.get("/patient-json-files/{file_id}", response_model=PatientJsonFileContentOut)
+def get_patient_json_file(file_id: int, db: Session = Depends(get_db)) -> PatientJsonFileContentOut:
+    row = db.get(PatientJsonFile, file_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Patient JSON file not found.")
+    return PatientJsonFileContentOut(id=row.id, name=row.name, data=row.data or {})
+
+
+@router.delete("/patient-json-files/{file_id}")
+def delete_patient_json_file(file_id: int, db: Session = Depends(get_db)) -> dict:
+    row = db.get(PatientJsonFile, file_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Patient JSON file not found.")
+    deleted_name = row.name
+    db.delete(row)
+    db.commit()
+    return {"deleted": deleted_name}
+
+
 @router.post("/forms/fill-template", response_model=FormGenerateResponse)
 def fill_template_with_patient_info(payload: FillTemplateRequest, db: Session = Depends(get_db)) -> FormGenerateResponse:
     try:
@@ -231,12 +287,13 @@ def fill_template_with_patient_info(payload: FillTemplateRequest, db: Session = 
 
     generator = PDFPrefillService(template_bytes=template_row.file_data)
     output_name = f"{Path(payload.template_name).stem}_user_{user.id}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.pdf"
+    active_mapping = load_global_field_mapping()
     try:
         output_file = generator.generate_prefilled_pdf(
             profile,
             user_id=user.id,
             output_name=output_name,
-            strict_field_mapping=DEFAULT_GLOBAL_FIELD_MAPPING,
+            strict_field_mapping=active_mapping,
             strict_mode=True,
         )
     except Exception as exc:

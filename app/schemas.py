@@ -158,6 +158,21 @@ class TemplateFileOut(BaseModel):
     has_mapping: bool = False
 
 
+class PatientJsonFileOut(BaseModel):
+    id: int
+    name: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class PatientJsonFileContentOut(BaseModel):
+    id: int
+    name: str
+    data: dict[str, Any]
+
+
 class FillTemplateRequest(BaseModel):
     template_name: str
     full_name: str
@@ -170,7 +185,7 @@ class FillTemplateRequest(BaseModel):
     province: str = "ON"
     other_provincial_registration_number: str = ""
     date_of_birth: str
-    service_date: str
+    service_date: str = ""
     phone_number: str | None = ""
     address: str | None = ""
 
