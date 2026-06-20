@@ -4,23 +4,38 @@ const API_BASE = ''
 
 const state = {
   templates: [],
+  patientPresets: [],
   selectedTemplate: '',
+  selectedPresetId: '',
 }
 
 const app = document.getElementById('app')
+
+function valueFrom(obj, keys, fallback = '') {
+  for (const key of keys) {
+    const value = obj?.[key]
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      return String(value).trim()
+    }
+  }
+  return fallback
+}
 
 function render() {
   app.innerHTML = `
     <div class="page-shell">
       <header class="top-bar">
         <div class="brand">
-          <img src="/logo-placeholder.jpg" alt="Logo placeholder" class="brand-logo" />
+          <img src="/LABRAT_LOGO.png" alt="LabRat Logo" class="brand-logo" />
           <div>
             <p class="eyebrow">Lab Workflow</p>
             <h1>Requisition Filler</h1>
           </div>
         </div>
-        <button id="loadTemplatesBtn" class="primary-btn">Load Templates</button>
+        <div class="top-actions">
+          <button id="loadTemplatesBtn" class="primary-btn">Load Templates</button>
+          <button id="loadPatientPresetsBtn" class="secondary-btn">Refresh Patients</button>
+        </div>
       </header>
 
       <main class="content-grid">
@@ -28,13 +43,25 @@ function render() {
           <div class="panel-header">
             <h2>Available Templates</h2>
           </div>
+          <div class="upload-row">
+            <input id="templateUpload" type="file" accept=".pdf,application/pdf" />
+            <button id="uploadTemplateBtn" class="secondary-btn">Upload PDF</button>
+          </div>
           <div id="templatesList" class="template-list"></div>
           <iframe id="templatePreview" class="preview-frame" title="Template preview"></iframe>
         </section>
 
         <section class="panel panel--right">
           <div class="panel-header">
-            <h2>Patient Details</h2>
+            <h2>Patient Presets</h2>
+          </div>
+          <div class="upload-row">
+            <input id="patientPresetUpload" type="file" accept=".json,application/json" />
+            <button id="uploadPatientPresetBtn" class="secondary-btn">Save JSON</button>
+          </div>
+          <div class="preset-controls">
+            <select id="patientPresetSelect"></select>
+            <button id="deletePatientPresetBtn" class="secondary-btn">Delete</button>
           </div>
           <form id="fillForm" class="form-grid">
             <input name="full_name" placeholder="Full name" />
@@ -71,12 +98,25 @@ function render() {
   const templatePreview = document.getElementById('templatePreview')
   const resultOutput = document.getElementById('resultOutput')
   const historyOutput = document.getElementById('historyOutput')
+  const patientPresetSelect = document.getElementById('patientPresetSelect')
+  const fillForm = document.getElementById('fillForm')
 
   document.getElementById('loadTemplatesBtn').addEventListener('click', loadTemplates)
+  document.getElementById('loadPatientPresetsBtn').addEventListener('click', loadPatientPresets)
+  document.getElementById('uploadTemplateBtn').addEventListener('click', uploadTemplate)
+  document.getElementById('uploadPatientPresetBtn').addEventListener('click', uploadPatientPreset)
+  document.getElementById('deletePatientPresetBtn').addEventListener('click', deletePatientPreset)
   document.getElementById('historyBtn').addEventListener('click', loadHistory)
-  document.getElementById('fillForm').addEventListener('submit', async (event) => {
+  patientPresetSelect.addEventListener('change', async () => {
+    const selectedId = patientPresetSelect.value
+    if (!selectedId) return
+    state.selectedPresetId = selectedId
+    await loadSelectedPreset(selectedId)
+  })
+
+  fillForm.addEventListener('submit', async (event) => {
     event.preventDefault()
-    const formData = new FormData(event.target)
+    const formData = new FormData(fillForm)
 
     const payload = {
       full_name: formData.get('full_name'),
@@ -97,7 +137,8 @@ function render() {
       body: JSON.stringify(payload),
     })
 
-    resultOutput.textContent = JSON.stringify(await response.json(), null, 2)
+    const json = await response.json()
+    resultOutput.textContent = JSON.stringify(json, null, 2)
     document.getElementById('historyEmail').value = payload.email
   })
 
@@ -136,6 +177,91 @@ function render() {
     })
   }
 
+  function populatePatientPresetOptions() {
+    patientPresetSelect.innerHTML = ''
+    const emptyOption = document.createElement('option')
+    emptyOption.value = ''
+    emptyOption.textContent = 'Select patient preset'
+    patientPresetSelect.appendChild(emptyOption)
+
+    state.patientPresets.forEach((preset) => {
+      const option = document.createElement('option')
+      option.value = String(preset.id)
+      option.textContent = `${preset.name} (#${preset.id})`
+      patientPresetSelect.appendChild(option)
+    })
+
+    if (state.selectedPresetId) {
+      patientPresetSelect.value = String(state.selectedPresetId)
+    }
+  }
+
+  async function loadPatientPresets() {
+    const response = await fetch(`${API_BASE}/api/patient-json-files`)
+    const presets = await response.json()
+    state.patientPresets = presets
+    populatePatientPresetOptions()
+  }
+
+  async function loadSelectedPreset(presetId) {
+    const response = await fetch(`${API_BASE}/api/patient-json-files/${encodeURIComponent(presetId)}`)
+    const data = await response.json()
+    const payload = data.data || {}
+
+    fillForm.elements.full_name.value = valueFrom(payload, ['full_name', 'fullName'], '')
+    fillForm.elements.email.value = valueFrom(payload, ['email'], '')
+    fillForm.elements.patient_last_name.value = valueFrom(payload, ['patient_last_name', 'last_name', 'lastName'], '')
+    fillForm.elements.patient_first_name.value = valueFrom(
+      payload,
+      ['patient_first_name', 'patient_first_and_middle_names', 'first_and_middle_names', 'first_name', 'firstName'],
+      ''
+    )
+    fillForm.elements.health_number.value = valueFrom(payload, ['health_number', 'healthNumber', 'insurance_number'], '')
+    fillForm.elements.date_of_birth.value = valueFrom(payload, ['date_of_birth', 'dob', 'dateOfBirth'], '')
+    fillForm.elements.service_date.value = valueFrom(payload, ['service_date'], '')
+    fillForm.elements.phone_number.value = valueFrom(payload, ['phone_number', 'phone', 'patients_telephone_contact_number'], '')
+    fillForm.elements.address.value = valueFrom(payload, ['address', 'patients_address'], '')
+  }
+
+  async function uploadTemplate() {
+    const input = document.getElementById('templateUpload')
+    if (!input.files || !input.files[0]) return
+    const form = new FormData()
+    form.append('file', input.files[0])
+    const response = await fetch(`${API_BASE}/api/template-files/upload`, {
+      method: 'POST',
+      body: form,
+    })
+    resultOutput.textContent = JSON.stringify(await response.json(), null, 2)
+    input.value = ''
+    await loadTemplates()
+  }
+
+  async function uploadPatientPreset() {
+    const input = document.getElementById('patientPresetUpload')
+    if (!input.files || !input.files[0]) return
+    const form = new FormData()
+    form.append('file', input.files[0])
+    const response = await fetch(`${API_BASE}/api/patient-json-files/upload`, {
+      method: 'POST',
+      body: form,
+    })
+    resultOutput.textContent = JSON.stringify(await response.json(), null, 2)
+    input.value = ''
+    await loadPatientPresets()
+  }
+
+  async function deletePatientPreset() {
+    const presetId = patientPresetSelect.value
+    if (!presetId) return
+    await fetch(`${API_BASE}/api/patient-json-files/${encodeURIComponent(presetId)}`, {
+      method: 'DELETE',
+    })
+    state.selectedPresetId = ''
+    await loadPatientPresets()
+    resultOutput.textContent = 'Deleted selected patient preset.'
+  }
+
   async function loadTemplates() {
     const response = await fetch(`${API_BASE}/api/template-files`)
     const templates = await response.json()
@@ -152,3 +278,5 @@ function render() {
 }
 
 render()
+loadTemplates()
+loadPatientPresets()
