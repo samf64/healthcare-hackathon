@@ -41,7 +41,7 @@ def _build_message(user: UserProfile, due_date: date, stage: ReminderStage) -> t
 
     subject = f"Lab requisition reminder for {user.full_name}"
     body = (
-        f"Hello {user.full_name},\n\n"
+        "Hello Doctor Demo,\n\n"
         f"Your laboratory requisition form is due on {due_date.isoformat()} "
         f"({stage.value.replace('_', ' ')}).\n"
         f"Use this secure link to review and pre-fill your form:\n{review_url}\n\n"
@@ -103,7 +103,7 @@ def run_daily_reminder_job(db: Session, notifier: EmailNotifier, today: date | N
 def build_patient_template_reminder_message(full_name: str, template_name: str, patient_file_name: str) -> tuple[str, str]:
     subject = f"Reminder: Submit lab requisition for {full_name}"
     body = (
-        f"Hello {full_name},\n\n"
+        "Hello Doctor Demo,\n\n"
         "This is your reminder to submit your lab requisition form.\n"
         f"Template: {template_name}\n"
         f"Patient file: {patient_file_name}\n\n"
