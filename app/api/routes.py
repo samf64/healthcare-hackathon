@@ -37,11 +37,11 @@ from app.services.form_templates import (
 from app.services.pdf_prefill import PDFPrefillService
 from app.services.reminders import run_daily_reminder_job
 from app.services.template_files import (
-    DEFAULT_GLOBAL_FIELD_MAPPING,
     delete_template_file,
     get_template_file_by_name,
     import_templates_from_folder,
     list_template_files,
+    load_global_field_mapping,
     upsert_template_file,
 )
 
@@ -231,12 +231,13 @@ def fill_template_with_patient_info(payload: FillTemplateRequest, db: Session = 
 
     generator = PDFPrefillService(template_bytes=template_row.file_data)
     output_name = f"{Path(payload.template_name).stem}_user_{user.id}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.pdf"
+    active_mapping = load_global_field_mapping()
     try:
         output_file = generator.generate_prefilled_pdf(
             profile,
             user_id=user.id,
             output_name=output_name,
-            strict_field_mapping=DEFAULT_GLOBAL_FIELD_MAPPING,
+            strict_field_mapping=active_mapping,
             strict_mode=True,
         )
     except Exception as exc:

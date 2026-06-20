@@ -82,7 +82,12 @@ class PDFPrefillService:
                 self._overlay_flat_pdf(output_path, output_path, profile_data, template_key=template_key)
         else:
             # Same-layout templates may be flattened; use deterministic fixed overlay in strict mode.
-            self._overlay_fixed_layout(template_source, output_path, profile_data)
+            self._overlay_fixed_layout(
+                template_source,
+                output_path,
+                profile_data,
+                strict_field_mapping=strict_field_mapping,
+            )
         return str(output_path.resolve())
 
     @staticmethod
@@ -106,18 +111,33 @@ class PDFPrefillService:
         mapped_checkbox_fields: list[str] = []
         mapping_override = strict_field_mapping or {}
         if mapping_override:
-            for source_key, field_name in mapping_override.items():
-                if not field_name:
+            for source_key, field_spec in mapping_override.items():
+                target_field = ""
+                explicit_value: str | None = None
+                if isinstance(field_spec, dict):
+                    target_field = str(field_spec.get("field", "")).strip()
+                    if field_spec.get("value") is not None:
+                        explicit_value = str(field_spec.get("value"))
+                else:
+                    target_field = str(field_spec).strip()
+
+                if not target_field:
                     continue
                 if source_key == "sex_m_checkbox" and str(derived.get("sex", "")).upper() == "M":
-                    mapped_checkbox_fields.append(str(field_name))
+                    if explicit_value is not None:
+                        text_field_values[target_field] = explicit_value
+                    else:
+                        mapped_checkbox_fields.append(target_field)
                     continue
                 if source_key == "sex_f_checkbox" and str(derived.get("sex", "")).upper() == "F":
-                    mapped_checkbox_fields.append(str(field_name))
+                    if explicit_value is not None:
+                        text_field_values[target_field] = explicit_value
+                    else:
+                        mapped_checkbox_fields.append(target_field)
                     continue
                 value = str(derived.get(source_key, "")).strip()
                 if value:
-                    text_field_values[str(field_name)] = value
+                    text_field_values[target_field] = value
 
         text_field_map = template_cfg.get("text_field_map", {})
         if not mapping_override and text_field_map:
@@ -247,7 +267,12 @@ class PDFPrefillService:
             writer.write(out_stream)
 
     @staticmethod
-    def _overlay_fixed_layout(template: str | PdfReader, output_path: Path, profile_data: dict[str, Any]) -> None:
+    def _overlay_fixed_layout(
+        template: str | PdfReader,
+        output_path: Path,
+        profile_data: dict[str, Any],
+        strict_field_mapping: dict[str, object] | None = None,
+    ) -> None:
         """
         Deterministic write mode for same-structure templates.
         Uses fixed coordinates aligned to the Ontario requisition structure.
@@ -256,40 +281,69 @@ class PDFPrefillService:
         first_page = writer.pages[0]
         values = PDFPrefillService._derive_profile_values(profile_data, "")
 
-        fixed_text_positions = {
-            "patient_last_name": (19.125, 515.4825),
-            "patient_first_name": (127.3125, 515.0175),
-            "health_number": (240.2175, 624.62866),
-            "health_version": (387.22498, 624.62866),
-            "dob_year": (474.285, 625.09564),
-            "dob_month": (534.1875, 624.62866),
-            "dob_day": (564.3668, 624.62866),
-            "phone_area": (453.43, 598.74),
-            "phone_rest": (491.66498, 598.74),
-            "address": (19.125, 470.4525),
-            "province": (240.2175, 598.2717),
-            "other_provincial_registration_number": (269.745, 598.27167),
-            "service_date": (342.7075, 125.332504),
+        field_id_to_position = {
+            "Text_11": (240.2175, 624.62866),
+            "Text_12": (387.22498, 624.62866),
+            "Text_13": (474.285, 625.09564),
+            "Text_14": (534.1875, 624.62866),
+            "Text_15": (564.3668, 624.62866),
+            "Text_16": (240.2175, 598.2717),
+            "Text_17": (269.745, 598.27167),
+            "Text_18": (453.43, 598.74),
+            "Text_19": (491.66498, 598.74),
+            "Text_20": (240.2175, 572.61066),
+            "Text_21": (240.2175, 544.30304),
+            "Text_22": (416.8957, 544.30365),
+            "Text_50": (239.33499, 470.4525),
+            "Date_2": (343.2075, 125.332504),
         }
-
-        sex_checkbox_positions = {
-            "M": (348.06067, 101.744995),
-            "F": (242.8575, 101.74213),
+        radio_value_to_position = {
+            # Sex radio buttons (M/F) in patient header section.
+            # Previous values were mistakenly mapped to lower form checkboxes.
+            "1": (421.02814, 626.5888),
+            "2": (449.96674, 626.5875),
         }
+        mapping = strict_field_mapping or {}
 
         packet = io.BytesIO()
         c = canvas.Canvas(packet, pagesize=letter)
         c.setFont("Helvetica", 9)
 
-        for key, (x, y) in fixed_text_positions.items():
-            value = str(values.get(key, "")).strip()
-            if value:
-                c.drawString(float(x) + 1, float(y) + 2, value)
+        if mapping:
+            for source_key, field_spec in mapping.items():
+                target_field = ""
+                target_value = None
+                if isinstance(field_spec, dict):
+                    target_field = str(field_spec.get("field", "")).strip()
+                    target_value = str(field_spec.get("value")) if field_spec.get("value") is not None else None
+                else:
+                    target_field = str(field_spec).strip()
 
-        sex = str(values.get("sex", "")).upper()
-        if sex in sex_checkbox_positions:
-            x, y = sex_checkbox_positions[sex]
-            c.drawString(float(x) + 1, float(y) + 1, "X")
+                if not target_field:
+                    continue
+
+                if source_key in ("sex_m_checkbox", "sex_f_checkbox"):
+                    sex = str(values.get("sex", "")).upper()
+                    if source_key == "sex_m_checkbox" and sex != "M":
+                        continue
+                    if source_key == "sex_f_checkbox" and sex != "F":
+                        continue
+                    radio_key = target_value or ("1" if source_key == "sex_m_checkbox" else "2")
+                    pos = radio_value_to_position.get(radio_key)
+                    if pos:
+                        c.drawString(float(pos[0]) + 1, float(pos[1]) + 1, "X")
+                    continue
+
+                value = str(values.get(source_key, "")).strip()
+                pos = field_id_to_position.get(target_field)
+                if value and pos:
+                    c.drawString(float(pos[0]) + 1, float(pos[1]) + 2, value)
+        else:
+            # Minimal fallback if mapping file is unavailable.
+            if values.get("patient_last_name"):
+                c.drawString(241.2175, 574.61066, values["patient_last_name"])
+            if values.get("patient_first_name"):
+                c.drawString(241.2175, 546.30304, values["patient_first_name"])
 
         c.save()
         packet.seek(0)
@@ -439,6 +493,22 @@ class PDFPrefillService:
             values["patient_first_name"] = str(profile_data.get("first_and_middle_names", "")).strip()
         if not values.get("patient_last_name"):
             values["patient_last_name"] = str(profile_data.get("last_name", "")).strip()
+        first_middle = str(values.get("patient_first_name", "")).strip()
+        if first_middle:
+            split_idx = -1
+            if len(first_middle) > 24:
+                midpoint = len(first_middle) // 2
+                left_space = first_middle.rfind(" ", 0, midpoint + 1)
+                right_space = first_middle.find(" ", midpoint)
+                candidates = [idx for idx in [left_space, right_space] if idx != -1]
+                if candidates:
+                    split_idx = min(candidates, key=lambda x: abs(x - midpoint))
+            if split_idx == -1:
+                values["patient_first_name_left"] = first_middle
+                values["patient_first_name_right"] = ""
+            else:
+                values["patient_first_name_left"] = first_middle[:split_idx].strip()
+                values["patient_first_name_right"] = first_middle[split_idx + 1 :].strip()
         date_of_birth = str(profile_data.get("date_of_birth", "")).strip().replace("/", "-")
         dob_parts = date_of_birth.split("-") if date_of_birth else []
         if len(dob_parts) == 3:

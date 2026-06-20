@@ -2,10 +2,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.database import Base
+from app.services import template_files
 from app.services.template_files import (
     DEFAULT_GLOBAL_FIELD_MAPPING,
     delete_template_file,
     get_template_file_by_name,
+    load_global_field_mapping,
     list_template_files,
     upsert_template_file,
 )
@@ -57,3 +59,15 @@ def test_delete_template_file_removes_row():
 def test_default_global_mapping_exists():
     assert "patient_last_name" in DEFAULT_GLOBAL_FIELD_MAPPING
     assert "health_number" in DEFAULT_GLOBAL_FIELD_MAPPING
+
+
+def test_load_global_field_mapping_uses_file_when_present(tmp_path):
+    original = template_files.MAPPING_FILE_PATH
+    try:
+        custom = tmp_path / "patient_field_mapping.json"
+        custom.write_text('{"patient_last_name":"Text_99"}', encoding="utf-8")
+        template_files.MAPPING_FILE_PATH = custom
+        loaded = load_global_field_mapping()
+        assert loaded["patient_last_name"] == "Text_99"
+    finally:
+        template_files.MAPPING_FILE_PATH = original

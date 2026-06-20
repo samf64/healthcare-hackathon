@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from sqlalchemy import select
@@ -7,9 +8,10 @@ from app.config import settings
 from app.models import TemplateFile
 
 
-DEFAULT_GLOBAL_FIELD_MAPPING: dict[str, str] = {
-    "patient_last_name": "Text_24",
-    "patient_first_name": "Text_27",
+DEFAULT_GLOBAL_FIELD_MAPPING: dict[str, object] = {
+    "patient_last_name": "Text_20",
+    "patient_first_name_left": "Text_21",
+    "patient_first_name_right": "Text_22",
     "health_number": "Text_11",
     "health_version": "Text_12",
     "dob_year": "Text_13",
@@ -17,19 +19,37 @@ DEFAULT_GLOBAL_FIELD_MAPPING: dict[str, str] = {
     "dob_day": "Text_15",
     "phone_area": "Text_18",
     "phone_rest": "Text_19",
-    "address": "Text_2",
-    "service_date": "Date_2",
+    "address": "Text_50",
     "province": "Text_16",
     "other_provincial_registration_number": "Text_17",
-    "sex_m_checkbox": "Checkbox_53",
-    "sex_f_checkbox": "Checkbox_54",
+    "sex_m_checkbox": {"field": "Radiobutton", "value": "1"},
+    "sex_f_checkbox": {"field": "Radiobutton", "value": "2"},
 }
+
+MAPPING_FILE_PATH = Path("mappings/patient_field_mapping.json")
 
 
 def _library_dir() -> Path:
     path = Path(settings.template_library_dir)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def load_global_field_mapping() -> dict[str, object]:
+    """
+    Source-of-truth mapping loader.
+    If mapping file exists and is valid JSON object, use it.
+    Otherwise fall back to baked defaults.
+    """
+    if not MAPPING_FILE_PATH.exists():
+        return dict(DEFAULT_GLOBAL_FIELD_MAPPING)
+    try:
+        loaded = json.loads(MAPPING_FILE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return dict(DEFAULT_GLOBAL_FIELD_MAPPING)
+    if not isinstance(loaded, dict):
+        return dict(DEFAULT_GLOBAL_FIELD_MAPPING)
+    return loaded
 
 
 def _validate_name(name: str) -> str:
