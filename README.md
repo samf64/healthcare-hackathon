@@ -11,25 +11,9 @@ FastAPI backend that:
    - `python -m venv .venv`
    - `.venv\Scripts\Activate.ps1`
    - `pip install -r requirements.txt`
-2. Configure `.env` (example):
-
-```env
-DATABASE_URL=sqlite:///./app.db
-TOKEN_SECRET=replace-with-strong-secret
-TOKEN_SALT=review-link
-TOKEN_EXPIRY_SECONDS=604800
-BASE_REVIEW_URL=http://localhost:8000/api/review
-REQUISITION_PDF_PATH=C:\Users\Sambo\OneDrive\Desktop\Ontario Laboratory Requisition Form.pdf
-GENERATED_PDF_DIR=generated_forms
-
-# Optional SMTP (leave blank for dry-run console email)
-SMTP_HOST=
-SMTP_PORT=587
-SMTP_USERNAME=
-SMTP_PASSWORD=
-SMTP_USE_TLS=true
-FROM_EMAIL=noreply@example.com
-```
+2. Configure environment variables:
+   - Copy `.env.example` to `.env`
+   - Update `.env` with your private values (especially `TOKEN_SECRET`, SMTP creds, and PDF path)
 
 ## Run
 
