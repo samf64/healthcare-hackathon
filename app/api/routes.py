@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from dateutil.relativedelta import relativedelta
 
+from app.config import settings
 from app.models import Cadence, GeneratedForm, PatientJsonFile, PatientTemplateReminder, RequisitionRequest, RequisitionTemplate, UserProfile
 from app.schemas import (
     FillTemplateRequest,
@@ -74,6 +75,20 @@ def _patient_value(data: dict, keys: list[str], fallback: str = "") -> str:
         if value is not None and str(value).strip() != "":
             return str(value).strip()
     return fallback
+
+
+def _safe_generated_file_path(file_path: str) -> Path:
+    raw = Path(file_path)
+    resolved = (Path.cwd() / raw).resolve() if not raw.is_absolute() else raw.resolve()
+    generated_root = Path(settings.generated_pdf_dir)
+    generated_root = (Path.cwd() / generated_root).resolve() if not generated_root.is_absolute() else generated_root.resolve()
+    if generated_root != resolved and generated_root not in resolved.parents:
+        raise HTTPException(status_code=400, detail="File path is outside generated forms directory.")
+    if resolved.suffix.lower() != ".pdf":
+        raise HTTPException(status_code=400, detail="Only PDF files can be opened.")
+    if not resolved.exists() or not resolved.is_file():
+        raise HTTPException(status_code=404, detail="Generated file not found.")
+    return resolved
 
 
 @router.get("/users", response_model=list[UserOut])
@@ -398,6 +413,12 @@ def fill_template_with_patient_info(payload: FillTemplateRequest, db: Session = 
     db.commit()
     db.refresh(generated)
     return FormGenerateResponse(generated_file=generated.file_path, generated_at=generated.created_at)
+
+
+@router.get("/forms/open")
+def open_generated_form(file_path: str) -> FileResponse:
+    resolved = _safe_generated_file_path(file_path)
+    return FileResponse(path=str(resolved), media_type="application/pdf", filename=resolved.name)
 
 
 @router.get("/templates", response_model=list[FormTemplateOut])

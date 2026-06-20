@@ -7,6 +7,7 @@ const state = {
   patientPresets: [],
   selectedTemplate: '',
   selectedPresetId: '',
+  lastGeneratedFilePath: '',
 }
 
 const app = document.getElementById('app')
@@ -66,6 +67,7 @@ function render() {
           <div class="form-grid">
             <select name="template_name" id="templateSelect"></select>
             <button id="fillFromPresetBtn" type="button" class="primary-btn wide">Fill Template PDF</button>
+            <button id="openGeneratedBtn" type="button" class="secondary-btn wide" disabled>Open Generated PDF</button>
           </div>
           <div class="form-grid" style="margin-top: 12px;">
             <select id="reminderMode">
@@ -90,6 +92,7 @@ function render() {
   const reminderMode = document.getElementById('reminderMode')
   const reminderRecipient = document.getElementById('reminderRecipient')
   const reminderMonths = document.getElementById('reminderMonths')
+  const openGeneratedBtn = document.getElementById('openGeneratedBtn')
 
   function setResult(message, isError = false) {
     resultOutput.textContent = isError ? `Error: ${message}` : message
@@ -114,6 +117,7 @@ function render() {
   document.getElementById('uploadPatientPresetBtn').addEventListener('click', uploadPatientPreset)
   document.getElementById('deletePatientPresetBtn').addEventListener('click', deletePatientPreset)
   document.getElementById('fillFromPresetBtn').addEventListener('click', fillTemplateFromPreset)
+  openGeneratedBtn.addEventListener('click', openGeneratedPdf)
   document.getElementById('setReminderBtn').addEventListener('click', setReminder)
   function updateReminderModeUI() {
     const isMonths = reminderMode.value === 'months'
@@ -299,10 +303,23 @@ function render() {
         body: JSON.stringify(payload),
       })
       const dataOut = await parseApiResponse(fillResponse)
-      setResult(`Template filled successfully. Generated file: ${dataOut.generated_file || 'created'}.`)
+      state.lastGeneratedFilePath = dataOut.generated_file || ''
+      openGeneratedBtn.disabled = !state.lastGeneratedFilePath
+      setResult(
+        `Template filled successfully. Generated PDF is ready${state.lastGeneratedFilePath ? ' and can be opened with the button above.' : '.'}`
+      )
     } catch (error) {
       setResult(error.message, true)
     }
+  }
+
+  function openGeneratedPdf() {
+    if (!state.lastGeneratedFilePath) {
+      setResult('No generated PDF is available yet. Fill a template first.', true)
+      return
+    }
+    const url = `${API_BASE}/api/forms/open?file_path=${encodeURIComponent(state.lastGeneratedFilePath)}`
+    window.open(url, '_blank', 'noopener')
   }
 
   async function setReminder() {
