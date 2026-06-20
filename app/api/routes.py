@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -7,9 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import GeneratedForm, RequisitionRequest, RequisitionTemplate, UserProfile, Cadence
+from app.models import Cadence, GeneratedForm, PatientJsonFile, RequisitionRequest, RequisitionTemplate, UserProfile
 from app.schemas import (
     FillTemplateRequest,
+    PatientJsonFileContentOut,
+    PatientJsonFileOut,
     FormGenerateResponse,
     FormHistoryItem,
     TemplateFileOut,
@@ -186,6 +189,59 @@ def delete_template_pdf(name: str, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(status_code=404, detail=f"Template not found: {name}")
     db.commit()
     return {"deleted": name}
+
+
+@router.get("/patient-json-files", response_model=list[PatientJsonFileOut])
+def list_patient_json_files(db: Session = Depends(get_db)) -> list[PatientJsonFile]:
+    return db.scalars(select(PatientJsonFile).order_by(PatientJsonFile.name)).all()
+
+
+@router.post("/patient-json-files/upload", response_model=PatientJsonFileOut)
+async def upload_patient_json_file(file: UploadFile = File(...), db: Session = Depends(get_db)) -> PatientJsonFileOut:
+    filename = (file.filename or "").strip()
+    if not filename.lower().endswith(".json"):
+        raise HTTPException(status_code=400, detail="Only .json files are allowed.")
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Uploaded JSON file is empty.")
+
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="JSON root must be an object.")
+
+    row = db.scalar(select(PatientJsonFile).where(PatientJsonFile.name == filename))
+    if row:
+        row.data = parsed
+        row.updated_at = datetime.utcnow()
+    else:
+        row = PatientJsonFile(name=filename, data=parsed)
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.get("/patient-json-files/{file_id}", response_model=PatientJsonFileContentOut)
+def get_patient_json_file(file_id: int, db: Session = Depends(get_db)) -> PatientJsonFileContentOut:
+    row = db.get(PatientJsonFile, file_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Patient JSON file not found.")
+    return PatientJsonFileContentOut(id=row.id, name=row.name, data=row.data or {})
+
+
+@router.delete("/patient-json-files/{file_id}")
+def delete_patient_json_file(file_id: int, db: Session = Depends(get_db)) -> dict:
+    row = db.get(PatientJsonFile, file_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Patient JSON file not found.")
+    deleted_name = row.name
+    db.delete(row)
+    db.commit()
+    return {"deleted": deleted_name}
 
 
 @router.post("/forms/fill-template", response_model=FormGenerateResponse)
