@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+sqlalchemy
+pydantic-settings
+apscheduler
+itsdangerous
+python-dateutil
+pypdf
+reportlab
+email-validator
+pytest
+SpeechRecognition
+PyAudio
