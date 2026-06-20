@@ -7,8 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Cadence
-from app.models import GeneratedForm, UserProfile
+from app.models import GeneratedForm, RequisitionRequest, RequisitionTemplate, UserProfile, Cadence
 from app.schemas import (
     FillTemplateRequest,
     FormGenerateResponse,
@@ -20,6 +19,13 @@ from app.schemas import (
     ReminderRunResult,
     ReminderSubscriptionOut,
     ReminderSubscriptionRequest,
+    RequisitionRequestCreate,
+    RequisitionRequestOut,
+    RequisitionTemplateCreate,
+    RequisitionTemplateOut,
+    UserCreate,
+    UserOut,
+    UserUpdate,
 )
 from app.services.audit import log_audit_event
 from app.services.email_notifier import EmailNotifier
@@ -43,6 +49,70 @@ def _template_or_404(template_key: str) -> dict:
 
 def _get_user_by_email_or_404(db: Session, email: str) -> UserProfile:
     user = db.scalar(select(UserProfile).where(UserProfile.email == email))
+@router.get("/users", response_model=list[UserOut])
+def list_users(db: Session = Depends(get_db)) -> list[UserProfile]:
+    return db.scalars(select(UserProfile).order_by(UserProfile.id)).all()
+
+
+@router.post("/templates", response_model=RequisitionTemplateOut)
+def create_template(
+    payload: RequisitionTemplateCreate,
+    db: Session = Depends(get_db),
+) -> RequisitionTemplate:
+    template = RequisitionTemplate(
+        name=payload.name,
+        description=payload.description,
+        template_json=payload.template_json,
+        version=payload.version,
+        is_active=payload.is_active,
+    )
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+    return template
+
+
+@router.get("/templates", response_model=list[RequisitionTemplateOut])
+def list_templates(db: Session = Depends(get_db)) -> list[RequisitionTemplate]:
+    return db.scalars(select(RequisitionTemplate).order_by(RequisitionTemplate.id)).all()
+
+
+@router.post("/requisition-requests", response_model=RequisitionRequestOut)
+def create_requisition_request(
+    payload: RequisitionRequestCreate,
+    db: Session = Depends(get_db),
+) -> RequisitionRequest:
+    user = db.get(UserProfile, payload.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    template = db.get(RequisitionTemplate, payload.template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found.")
+
+    request = RequisitionRequest(
+        user_id=payload.user_id,
+        template_id=payload.template_id,
+        status=payload.status,
+        reminder_interval_days=payload.reminder_interval_days,
+        next_reminder_at=payload.next_reminder_at,
+        custom_payload=payload.custom_payload,
+        notes=payload.notes,
+    )
+    db.add(request)
+    db.commit()
+    db.refresh(request)
+    return request
+
+
+@router.get("/requisition-requests", response_model=list[RequisitionRequestOut])
+def list_requisition_requests(db: Session = Depends(get_db)) -> list[RequisitionRequest]:
+    return db.scalars(select(RequisitionRequest).order_by(RequisitionRequest.id)).all()
+
+
+@router.patch("/users/{user_id}", response_model=UserOut)
+def update_user(user_id: int, payload: UserUpdate, db: Session = Depends(get_db)) -> UserProfile:
+    user = db.get(UserProfile, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
     return user

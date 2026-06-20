@@ -18,6 +18,21 @@ class ReminderStage(str, Enum):
     OVERDUE_7_DAYS = "overdue_7_days"
 
 
+class RequisitionStatus(str, Enum):
+    DRAFT = "draft"
+    PENDING = "pending"
+    SENT = "sent"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class ReminderEventType(str, Enum):
+    SENT = "sent"
+    FAILED = "failed"
+    VIEWED = "viewed"
+    COMPLETED = "completed"
+
+
 class UserProfile(Base):
     __tablename__ = "user_profiles"
 
@@ -34,6 +49,10 @@ class UserProfile(Base):
     reminders: Mapped[list["ReminderLog"]] = relationship(back_populates="user", cascade="all,delete")
     generated_forms: Mapped[list["GeneratedForm"]] = relationship(back_populates="user", cascade="all,delete")
     audit_events: Mapped[list["AuditLog"]] = relationship(back_populates="user", cascade="all,delete")
+    requisition_requests: Mapped[list["RequisitionRequest"]] = relationship(
+        back_populates="user",
+        cascade="all,delete",
+    )
 
 
 class ReminderLog(Base):
@@ -49,6 +68,65 @@ class ReminderLog(Base):
     details: Mapped[str] = mapped_column(String(500), default="")
 
     user: Mapped["UserProfile"] = relationship(back_populates="reminders")
+
+
+class RequisitionTemplate(Base):
+    __tablename__ = "requisition_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(150), nullable=False, unique=True, index=True)
+    description: Mapped[str] = mapped_column(String(500), default="")
+    template_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    requisition_requests: Mapped[list["RequisitionRequest"]] = relationship(
+        back_populates="template",
+        cascade="all,delete",
+    )
+
+
+class RequisitionRequest(Base):
+    __tablename__ = "requisition_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id"), index=True)
+    template_id: Mapped[int] = mapped_column(ForeignKey("requisition_templates.id"), index=True)
+    status: Mapped[RequisitionStatus] = mapped_column(SQLEnum(RequisitionStatus), nullable=False, default=RequisitionStatus.DRAFT)
+    reminder_interval_days: Mapped[int] = mapped_column(Integer, default=0)
+    next_reminder_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    last_reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    custom_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    notes: Mapped[str] = mapped_column(String(1000), default="")
+
+    user: Mapped["UserProfile"] = relationship(back_populates="requisition_requests")
+    template: Mapped["RequisitionTemplate"] = relationship(back_populates="requisition_requests")
+    reminder_events: Mapped[list["ReminderEvent"]] = relationship(
+        back_populates="requisition_request",
+        cascade="all,delete",
+    )
+
+
+class ReminderEvent(Base):
+    __tablename__ = "reminder_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    requisition_request_id: Mapped[int] = mapped_column(
+        ForeignKey("requisition_requests.id"),
+        index=True,
+    )
+    event_type: Mapped[ReminderEventType] = mapped_column(
+        SQLEnum(ReminderEventType),
+        nullable=False,
+    )
+    sent_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    details: Mapped[str] = mapped_column(String(500), default="")
+
+    requisition_request: Mapped["RequisitionRequest"] = relationship(back_populates="reminder_events")
 
 
 class GeneratedForm(Base):

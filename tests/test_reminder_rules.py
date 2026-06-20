@@ -4,7 +4,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.database import Base
-from app.models import Cadence, ReminderStage, UserProfile
+from app.models import (
+    Cadence,
+    RequisitionRequest,
+    RequisitionStatus,
+    RequisitionTemplate,
+    ReminderStage,
+    UserProfile,
+)
 from app.services.reminders import determine_stage, next_due_date, run_daily_reminder_job
 
 
@@ -81,4 +88,46 @@ def test_run_daily_reminder_job_skips_disabled_reminders():
     assert result.scanned_users == 0
     assert result.reminders_sent == 0
     assert notifier.calls == 0
+def test_requisition_models_can_store_template_and_request():
+    db = _session()
+
+    user = UserProfile(
+        full_name="Jane Doe",
+        email="jane@example.com",
+        cadence=Cadence.SIX_MONTHS,
+        last_completed_date=date(2026, 1, 1),
+        profile_data={"patient_last_name": "Doe"},
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    template = RequisitionTemplate(
+        name="Diabetes Blood Tests",
+        description="Baseline diabetic screening panel",
+        template_json={"tests": ["A1C", "Glucose", "Lipids"]},
+        version=1,
+        is_active=True,
+    )
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+
+    request = RequisitionRequest(
+        user_id=user.id,
+        template_id=template.id,
+        status=RequisitionStatus.DRAFT,
+        reminder_interval_days=90,
+        next_reminder_at=date(2026, 4, 1),
+        custom_payload={"priority": "routine"},
+    )
+    db.add(request)
+    db.commit()
+    db.refresh(request)
+
+    assert request.id is not None
+    assert request.template_id == template.id
+    assert request.user_id == user.id
+    assert request.status == RequisitionStatus.DRAFT
+    assert request.template.name == "Diabetes Blood Tests"
 

@@ -3,7 +3,7 @@ from typing import Any
 
 from pydantic import BaseModel, EmailStr, Field
 
-from app.models import Cadence
+from app.models import Cadence, RequisitionStatus
 
 
 class UserCreate(BaseModel):
@@ -30,6 +30,55 @@ class UserOut(BaseModel):
     last_completed_date: date
     profile_data: dict[str, Any]
     is_active: bool
+
+    class Config:
+        from_attributes = True
+
+
+class RequisitionTemplateCreate(BaseModel):
+    name: str
+    description: str = ""
+    template_json: dict[str, Any] = Field(default_factory=dict)
+    version: int = 1
+    is_active: bool = True
+
+
+class RequisitionTemplateOut(BaseModel):
+    id: int
+    name: str
+    description: str
+    template_json: dict[str, Any]
+    version: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RequisitionRequestCreate(BaseModel):
+    user_id: int
+    template_id: int
+    status: RequisitionStatus = RequisitionStatus.DRAFT
+    reminder_interval_days: int = 0
+    next_reminder_at: date | None = None
+    custom_payload: dict[str, Any] = Field(default_factory=dict)
+    notes: str = ""
+
+
+class RequisitionRequestOut(BaseModel):
+    id: int
+    user_id: int
+    template_id: int
+    status: RequisitionStatus
+    reminder_interval_days: int
+    next_reminder_at: date | None
+    last_reminder_sent_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    custom_payload: dict[str, Any]
+    notes: str
 
     class Config:
         from_attributes = True
