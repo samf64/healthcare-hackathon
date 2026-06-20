@@ -81,9 +81,8 @@ class PDFPrefillService:
             if not strict_mode and not has_explicit_mapping:
                 self._overlay_flat_pdf(output_path, output_path, profile_data, template_key=template_key)
         else:
-            if strict_mode:
-                raise ValueError("Template is not fillable. Strict mapping mode requires an AcroForm template.")
-            self._overlay_flat_pdf(template_source, output_path, profile_data, template_key=template_key)
+            # Same-layout templates may be flattened; use deterministic fixed overlay in strict mode.
+            self._overlay_fixed_layout(template_source, output_path, profile_data)
         return str(output_path.resolve())
 
     @staticmethod
@@ -248,6 +247,59 @@ class PDFPrefillService:
             writer.write(out_stream)
 
     @staticmethod
+    def _overlay_fixed_layout(template: str | PdfReader, output_path: Path, profile_data: dict[str, Any]) -> None:
+        """
+        Deterministic write mode for same-structure templates.
+        Uses fixed coordinates aligned to the Ontario requisition structure.
+        """
+        writer = PdfWriter(clone_from=template)
+        first_page = writer.pages[0]
+        values = PDFPrefillService._derive_profile_values(profile_data, "")
+
+        fixed_text_positions = {
+            "patient_last_name": (19.125, 515.4825),
+            "patient_first_name": (127.3125, 515.0175),
+            "health_number": (240.2175, 624.62866),
+            "health_version": (387.22498, 624.62866),
+            "dob_year": (474.285, 625.09564),
+            "dob_month": (534.1875, 624.62866),
+            "dob_day": (564.3668, 624.62866),
+            "phone_area": (453.43, 598.74),
+            "phone_rest": (491.66498, 598.74),
+            "address": (19.125, 470.4525),
+            "province": (240.2175, 598.2717),
+            "other_provincial_registration_number": (269.745, 598.27167),
+            "service_date": (342.7075, 125.332504),
+        }
+
+        sex_checkbox_positions = {
+            "M": (348.06067, 101.744995),
+            "F": (242.8575, 101.74213),
+        }
+
+        packet = io.BytesIO()
+        c = canvas.Canvas(packet, pagesize=letter)
+        c.setFont("Helvetica", 9)
+
+        for key, (x, y) in fixed_text_positions.items():
+            value = str(values.get(key, "")).strip()
+            if value:
+                c.drawString(float(x) + 1, float(y) + 2, value)
+
+        sex = str(values.get("sex", "")).upper()
+        if sex in sex_checkbox_positions:
+            x, y = sex_checkbox_positions[sex]
+            c.drawString(float(x) + 1, float(y) + 1, "X")
+
+        c.save()
+        packet.seek(0)
+
+        overlay_pdf = PdfReader(packet)
+        first_page.merge_page(overlay_pdf.pages[0])
+        with output_path.open("wb") as out_stream:
+            writer.write(out_stream)
+
+    @staticmethod
     def _resolve_text_fields_by_coords(annots: list, anchors: dict[str, tuple[tuple[float, float], str]]) -> dict[str, str]:
         resolved: dict[str, str] = {}
         used: set[str] = set()
@@ -383,6 +435,10 @@ class PDFPrefillService:
     @staticmethod
     def _derive_profile_values(profile_data: dict[str, Any], other_tests_text: str) -> dict[str, str]:
         values = {k: str(v) for k, v in profile_data.items() if v is not None}
+        if not values.get("patient_first_name"):
+            values["patient_first_name"] = str(profile_data.get("first_and_middle_names", "")).strip()
+        if not values.get("patient_last_name"):
+            values["patient_last_name"] = str(profile_data.get("last_name", "")).strip()
         date_of_birth = str(profile_data.get("date_of_birth", "")).strip().replace("/", "-")
         dob_parts = date_of_birth.split("-") if date_of_birth else []
         if len(dob_parts) == 3:

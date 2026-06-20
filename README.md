@@ -30,6 +30,26 @@ Simple workflow:
 5. Pick a template and fill patient fields
 6. Click **Fill Template PDF**
 
+You can also upload a patient JSON file in the fill section to auto-populate fields.
+Example JSON:
+```json
+{
+  "full_name": "Sami Farah",
+  "email": "sami@example.com",
+  "patient_last_name": "Farah",
+  "patient_first_name": "Sami",
+  "health_number": "1234567890",
+  "health_version": "HH",
+  "sex": "M",
+  "province": "ON",
+  "other_provincial_registration_number": "123456789012",
+  "date_of_birth": "2004-08-16",
+  "service_date": "2026/06/20",
+  "phone_number": "6477669383",
+  "address": "45 Mann"
+}
+```
+
 ## Main Endpoints
 
 - `GET /api/template-files` list template PDFs from database

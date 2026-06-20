@@ -54,6 +54,8 @@ def home() -> str:
 
   <section>
     <h2>2) Fill Selected Template</h2>
+    <input id="patient_json_upload" type="file" accept=".json,application/json" />
+    <button onclick="loadPatientJson()">Load Patient JSON</button>
     <input id="full_name" placeholder="Full name" />
     <input id="email" placeholder="Email" />
     <input id="patient_last_name" placeholder="Patient last name" />
@@ -128,6 +130,53 @@ def home() -> str:
       document.getElementById('generate_result').textContent = JSON.stringify(await res.json(), null, 2);
       input.value = '';
       await loadTemplates();
+    }
+
+    function _valueFrom(obj, keys, fallback = '') {
+      for (const key of keys) {
+        if (obj[key] !== undefined && obj[key] !== null && String(obj[key]).trim() !== '') {
+          return String(obj[key]).trim();
+        }
+      }
+      return fallback;
+    }
+
+    async function loadPatientJson() {
+      const input = document.getElementById('patient_json_upload');
+      if (!input.files || !input.files[0]) return;
+      const text = await input.files[0].text();
+      let data = {};
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        document.getElementById('generate_result').textContent = 'Invalid JSON file.';
+        return;
+      }
+
+      document.getElementById('patient_last_name').value = _valueFrom(data, ['patient_last_name', 'last_name', 'lastName']);
+      document.getElementById('patient_first_name').value = _valueFrom(
+        data,
+        ['patient_first_name', 'patient_first_and_middle_names', 'first_and_middle_names', 'first_name', 'firstName']
+      );
+      document.getElementById('health_number').value = _valueFrom(data, ['health_number', 'healthNumber', 'insurance_number']);
+      document.getElementById('health_version').value = _valueFrom(data, ['health_version', 'healthVersion']);
+      document.getElementById('sex').value = _valueFrom(data, ['sex', 'gender']).toUpperCase();
+      document.getElementById('province').value = _valueFrom(data, ['province'], 'ON').toUpperCase();
+      document.getElementById('other_provincial_registration_number').value = _valueFrom(
+        data,
+        ['other_provincial_registration_number', 'otherProvincialRegistrationNumber']
+      );
+      document.getElementById('date_of_birth').value = _valueFrom(data, ['date_of_birth', 'dob', 'dateOfBirth']);
+      document.getElementById('phone_number').value = _valueFrom(data, ['phone_number', 'phone', 'patients_telephone_contact_number']);
+      document.getElementById('address').value = _valueFrom(data, ['address', 'patients_address']);
+
+      if (data.full_name || data.email) {
+        document.getElementById('full_name').value = _valueFrom(data, ['full_name', 'fullName']);
+        document.getElementById('email').value = _valueFrom(data, ['email']);
+      }
+
+      document.getElementById('generate_result').textContent = 'Loaded patient JSON into form.';
+      input.value = '';
     }
 
     async function generate() {
