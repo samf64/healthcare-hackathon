@@ -9,5 +9,3 @@ pypdf
 reportlab
 email-validator
 pytest
-SpeechRecognition
-PyAudio
