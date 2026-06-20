@@ -91,6 +91,23 @@ function render() {
   const reminderRecipient = document.getElementById('reminderRecipient')
   const reminderMonths = document.getElementById('reminderMonths')
 
+  function setResult(message, isError = false) {
+    resultOutput.textContent = isError ? `Error: ${message}` : message
+  }
+
+  async function parseApiResponse(response) {
+    let data = {}
+    try {
+      data = await response.json()
+    } catch (_err) {
+      data = {}
+    }
+    if (!response.ok) {
+      throw new Error(data.detail || 'Request failed.')
+    }
+    return data
+  }
+
   document.getElementById('loadTemplatesBtn').addEventListener('click', loadTemplates)
   document.getElementById('loadPatientPresetsBtn').addEventListener('click', loadPatientPresets)
   document.getElementById('uploadTemplateBtn').addEventListener('click', uploadTemplate)
@@ -165,10 +182,14 @@ function render() {
   }
 
   async function loadPatientPresets() {
-    const response = await fetch(`${API_BASE}/api/patient-json-files`)
-    const presets = await response.json()
-    state.patientPresets = presets
-    populatePatientPresetOptions()
+    try {
+      const response = await fetch(`${API_BASE}/api/patient-json-files`)
+      const presets = await parseApiResponse(response)
+      state.patientPresets = presets
+      populatePatientPresetOptions()
+    } catch (error) {
+      setResult(error.message, true)
+    }
   }
 
   async function uploadTemplate() {
@@ -176,13 +197,18 @@ function render() {
     if (!input.files || !input.files[0]) return
     const form = new FormData()
     form.append('file', input.files[0])
-    const response = await fetch(`${API_BASE}/api/template-files/upload`, {
-      method: 'POST',
-      body: form,
-    })
-    resultOutput.textContent = JSON.stringify(await response.json(), null, 2)
-    input.value = ''
-    await loadTemplates()
+    try {
+      const response = await fetch(`${API_BASE}/api/template-files/upload`, {
+        method: 'POST',
+        body: form,
+      })
+      const data = await parseApiResponse(response)
+      input.value = ''
+      await loadTemplates()
+      setResult(`Template "${data.name || 'PDF'}" uploaded successfully.`)
+    } catch (error) {
+      setResult(error.message, true)
+    }
   }
 
   async function uploadPatientPreset() {
@@ -190,32 +216,46 @@ function render() {
     if (!input.files || !input.files[0]) return
     const form = new FormData()
     form.append('file', input.files[0])
-    const response = await fetch(`${API_BASE}/api/patient-json-files/upload`, {
-      method: 'POST',
-      body: form,
-    })
-    resultOutput.textContent = JSON.stringify(await response.json(), null, 2)
-    input.value = ''
-    await loadPatientPresets()
+    try {
+      const response = await fetch(`${API_BASE}/api/patient-json-files/upload`, {
+        method: 'POST',
+        body: form,
+      })
+      const data = await parseApiResponse(response)
+      input.value = ''
+      await loadPatientPresets()
+      setResult(`Patient file "${data.name || 'JSON'}" saved successfully.`)
+    } catch (error) {
+      setResult(error.message, true)
+    }
   }
 
   async function deletePatientPreset() {
     const presetId = patientPresetSelect.value
     if (!presetId) return
-    await fetch(`${API_BASE}/api/patient-json-files/${encodeURIComponent(presetId)}`, {
-      method: 'DELETE',
-    })
-    state.selectedPresetId = ''
-    await loadPatientPresets()
-    resultOutput.textContent = 'Deleted selected patient preset.'
+    try {
+      const response = await fetch(`${API_BASE}/api/patient-json-files/${encodeURIComponent(presetId)}`, {
+        method: 'DELETE',
+      })
+      const data = await parseApiResponse(response)
+      state.selectedPresetId = ''
+      await loadPatientPresets()
+      setResult(`Patient file "${data.deleted || ''}" deleted.`)
+    } catch (error) {
+      setResult(error.message, true)
+    }
   }
 
   async function loadTemplates() {
-    const response = await fetch(`${API_BASE}/api/template-files`)
-    const templates = await response.json()
-    state.templates = templates
-    populateTemplateOptions()
-    renderTemplates()
+    try {
+      const response = await fetch(`${API_BASE}/api/template-files`)
+      const templates = await parseApiResponse(response)
+      state.templates = templates
+      populateTemplateOptions()
+      renderTemplates()
+    } catch (error) {
+      setResult(error.message, true)
+    }
   }
 
   async function fillTemplateFromPreset() {
@@ -225,7 +265,7 @@ function render() {
     }
 
     const response = await fetch(`${API_BASE}/api/patient-json-files/${encodeURIComponent(state.selectedPresetId)}`)
-    const preset = await response.json()
+    const preset = await parseApiResponse(response)
     const data = preset.data || {}
     const payload = {
       full_name: valueFrom(data, ['full_name', 'fullName'], 'Patient'),
@@ -249,15 +289,20 @@ function render() {
       address: valueFrom(data, ['address', 'patients_address']),
     }
     if (!payload.email) {
-      resultOutput.textContent = 'Selected patient JSON is missing email.'
+      setResult('Selected patient JSON is missing email.', true)
       return
     }
-    const fillResponse = await fetch(`${API_BASE}/api/forms/fill-template`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    resultOutput.textContent = JSON.stringify(await fillResponse.json(), null, 2)
+    try {
+      const fillResponse = await fetch(`${API_BASE}/api/forms/fill-template`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const dataOut = await parseApiResponse(fillResponse)
+      setResult(`Template filled successfully. Generated file: ${dataOut.generated_file || 'created'}.`)
+    } catch (error) {
+      setResult(error.message, true)
+    }
   }
 
   async function setReminder() {
@@ -278,12 +323,21 @@ function render() {
       months: mode === 'months' ? months : null,
       recipient_email: reminderRecipient.value.trim() || null,
     }
-    const response = await fetch(`${API_BASE}/api/reminders/patient-template`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    resultOutput.textContent = JSON.stringify(await response.json(), null, 2)
+    try {
+      const response = await fetch(`${API_BASE}/api/reminders/patient-template`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await parseApiResponse(response)
+      if (data.mode === 'instant') {
+        setResult(data.sent_now ? 'Reminder email sent successfully.' : `Reminder email failed: ${data.detail}`)
+      } else {
+        setResult(`Reminder scheduled successfully. Next email date: ${data.next_send_on || 'set'}.`)
+      }
+    } catch (error) {
+      setResult(error.message, true)
+    }
   }
 
   let isRefreshing = false
