@@ -34,10 +34,10 @@ You can also upload a patient JSON file in the fill section to auto-populate fie
 Example JSON:
 ```json
 {
-  "full_name": "Sami Farah",
-  "email": "sami@example.com",
-  "patient_last_name": "Farah",
-  "patient_first_name": "Sami",
+  "full_name": "Bob John",
+  "email": "bob@example.com",
+  "patient_last_name": "John",
+  "patient_first_name": "Bob",
   "health_number": "1234567890",
   "health_version": "HH",
   "sex": "M",
@@ -46,7 +46,7 @@ Example JSON:
   "date_of_birth": "2004-08-16",
   "service_date": "2026/06/20",
   "phone_number": "6477669383",
-  "address": "45 Mann"
+  "address": "House 123"
 }
 ```
 
